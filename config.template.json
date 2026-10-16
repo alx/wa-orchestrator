@@ -1,0 +1,61 @@
+{
+  "groups": [
+    {
+      "jid": "__JID__",
+      "name": "AI Slop",
+      "brain": "ai-slop"
+    },
+    {
+      "jid": "__JID__",
+      "name": "C-dl-PO",
+      "brain": "cpo"
+    }
+  ],
+  "triggerPrefix": "pi ",
+  "botPrefix": "🤖 ",
+  "ackMessage": "🤖 on it — the brain is thinking…",
+  "dryRun": false,
+  "sessionsDir": "/home/alx/code/wa-orchestrator/sessions",
+  "wwebjsCacheDir": "/home/alx/code/ai-slop-wa/.wwebjs_cache",
+  "chromiumPath": "/usr/bin/chromium",
+  "activityLog": "/home/alx/code/wa-orchestrator/activity/activity.jsonl",
+  "activityMaxBytes": 1048576,
+  "replyTimeoutMs": 300000,
+  "runTimeoutMs": 900000,
+  "sandboxImage": "wa-orchestrator-sandbox",
+  "modelLock": "qwen3.8-27b-gpu-uncanny",
+  "provider": "gd",
+  "hostPiAgentDir": "/home/alx/.pi/agent",
+  "piConfigDir": "/home/alx/code/wa-orchestrator/sandbox/pi-config",
+  "workDir": "/home/alx/code/wa-orchestrator/sandbox/work",
+  "brains": {
+    "ai-slop": {
+      "kind": "beads",
+      "beadsRepoDir": "/home/alx/code/ai-slop-wa/sandbox/beads",
+      "beadsLabel": "ai-slop",
+      "beadsParentEpic": "org-o15h",
+      "runCmd": "run",
+      "artifactRepoDir": "/home/alx/code/ai-slop-wa",
+      "defaultAsk": "List the current open ai-slop beads."
+    },
+    "cpo": {
+      "kind": "cpo",
+      "beadsRepoDir": "/home/alx/org",
+      "epics": [
+        "org-9s8",
+        "org-a0s5"
+      ],
+      "runCmd": "edit",
+      "defaultAsk": "Liste les beads ouverts du Centre de la Photographie Ordinaire (arbres org-9s8 et org-a0s5).",
+      "siteDir": "/home/alx/code/centredelaphotographieordinaire/website-draft",
+      "siteBuildCmd": "hugo build --minify --baseURL \"https://centre-de-la-photographie-ordinaire.github.io/website-draft/\" --destination /tmp/hugo-out",
+      "siteLiveUrl": "https://centre-de-la-photographie-ordinaire.github.io/website-draft/"
+    }
+  },
+  "gitHomeDir": "/home/alx/code/wa-orchestrator/sandbox/git-home",
+  "hostGitCredentials": "/home/alx/.git-credentials",
+  "gitIdentity": {
+    "name": "Alexandre Girard Davila",
+    "email": "git@alexgirard.com"
+  }
+}

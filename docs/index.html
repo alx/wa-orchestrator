@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wa-orchestrator — orchestrateur WhatsApp multi-groupes</title>
+<meta name="description" content="Un processus, un compte WhatsApp, N groupes, un cerveau par groupe. Agent pi sandboxé dans Docker.">
+<style>
+:root { --ink:#1a1a1a; --accent:#FAB617; --cream:#F5EFE4; --line:#e2ded4; }
+body { margin:0; font:16px/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--cream); }
+main { max-width:46rem; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+header.hero { background:var(--ink); color:var(--cream); padding:3.5rem 1.25rem; }
+header.hero .inner { max-width:46rem; margin:0 auto; }
+h1 { font-size:2rem; margin:0 0 .5rem; letter-spacing:-.02em; }
+h1 .tag { display:inline-block; background:var(--accent); color:var(--ink); border-radius:.35rem; padding:.05rem .5rem; font-size:1.1rem; vertical-align:middle; margin-left:.5rem; }
+.sub { font-size:1.15rem; opacity:.92; margin-top:.75rem; }
+h2 { margin-top:2.25rem; font-size:1.25rem; border-bottom:2px solid var(--accent); display:inline-block; padding-bottom:.2rem; }
+pre { background:#232323; color:#f2f2f2; padding:1rem; border-radius:.5rem; overflow-x:auto; font-size:.85rem; line-height:1.45; }
+code { font-family:ui-monospace,Menlo,Consolas,monospace; }
+:not(pre) > code { background:#e8e2d4; padding:.1rem .35rem; border-radius:.25rem; font-size:.88em; }
+table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.95rem; }
+th,td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; }
+th { background:#e8e2d4; }
+a { color:#8a6d00; }
+ul,ol { padding-left:1.4rem; }
+li { margin:.25rem 0; }
+.badge { display:inline-block; background:var(--ink); color:var(--cream); border-radius:.35rem; padding:.1rem .55rem; font-size:.8rem; }
+footer { margin-top:3rem; font-size:.85rem; opacity:.7; }
+.flow { background:#232323; color:#cfcfcf; padding:1rem; border-radius:.5rem; font-size:.8rem; overflow-x:auto; white-space:pre; }
+</style>
+</head>
+<body>
+<header class="hero"><div class="inner">
+<h1>wa-orchestrator <span class="tag">1 processus · N groupes</span></h1>
+<p class="sub">Un compte WhatsApp, des groupes enregistrés, et un <strong>cerveau par
+groupe</strong> : agent <a href="https://pi.dev">pi</a> 1.2.0 exécuté dans un
+conteneur Docker sandboxé, modèle LLM verrouillé.</p>
+</div></header>
+<main>
+
+<h2>Architecture</h2>
+<div class="flow">WhatsApp ──wwebjs──▶ index.js ──par groupe──▶ brain.js ──docker──▶ conteneur
+ (1 compte)          registre                 docker run           agent pi
+                                                            ├─ beads (lecture seule)
+                                                            ├─ outils (git, hugo…)
+                                                            └─ 1 cerveau ≠ 1 groupe</div>
+<p>Le cerveau est choisi <strong>par groupe</strong> (champ <code>brain</code> du
+registre), pas par message ni par serveur. Deux profils livrés :</p>
+<table>
+<tr><th>profil</th><th>free-text <code>pi …</code></th><th>run modes</th></tr>
+<tr><td><code>ai-slop</code></td><td>beads du projet AI Slop</td><td><code>pi run &lt;bead&gt;</code> → artefacts sur branche <code>task/&lt;id&gt;</code></td></tr>
+<tr><td><code>cpo</code></td><td>beads du Centre de la Photographie Ordinaire</td><td><code>pi edit &lt;instruction&gt;</code> → édite le site, build Hugo, <strong>commit + push</strong></td></tr>
+</table>
+
+<h2>Démarrage rapide</h2>
+<pre>npm install
+bash sandbox/build.sh          # image docker (pi, bd, jq, hugo_extended)
+cp config.template.json config.json   # remplir JIDs + chemins
+# unités systemd user-scoped fournies :
+systemctl --user enable --now wa-orchestrator wa-orchestrator-dashboard</pre>
+<p>Prérequis : docker, <code>xvfb-run</code>, Chromium système, node ≥ 22.
+La session WhatsApp vit dans <code>sessions/</code> — <strong>un seul client
+par compte</strong>, jamais deux instances en même temps.</p>
+
+<h2>Extension</h2>
+<ul>
+<li><strong>Ajouter un groupe</strong> = une entrée <code>{"jid", "name", "brain"}</code>
+dans <code>groups[]</code> + redémarrage. JID : premier message du groupe, ou
+<code>xvfb-run -a node discover.js</code> en fenêtre de maintenance.</li>
+<li><strong>Ajouter un cerveau</strong> = un profil dans <code>brains{}</code>
+(dossier beads, prompt, run modes) pointé depuis le registre.</li>
+</ul>
+
+<h2>Sécurité</h2>
+<ul>
+<li>Tous les membres d'un groupe enregistré peuvent commander (pas d'auth par membre).</li>
+<li>Run modes d'écriture scopés par prompt : édits minimaux, build avant push,
+jamais de force-push, jamais <code>.github/</code>.</li>
+<li>Credentials matérialisées dans le conteneur, jamais dans le repo
+(<code>config.json</code> gitignored, seuls des templates sont publiés).</li>
+<li>Tout est tracé : <code>activity/activity.jsonl</code> + dashboard <code>:8093</code>.</li>
+</ul>
+
+<h2>Paquet pi / npm</h2>
+<p>Publié comme <a href="https://pi.dev/docs/latest/packages"><em>pi
+package</em></a> (keyword <code>pi-package</code>, manifest <code>pi</code>) :
+<code>pi install npm:wa-orchestrator</code> installe le daemon et la skill
+d'exploitation.</p>
+
+<footer>repo : <a href="https://github.com/alx/wa-orchestrator">github.com/alx/wa-orchestrator</a> —
+docs publiées depuis la branche <code>gh-pages</code></footer>
+</main>
+</body>
+</html>

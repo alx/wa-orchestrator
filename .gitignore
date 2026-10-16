@@ -1,0 +1,9 @@
+node_modules/
+sessions/
+activity/
+sandbox/git-home/
+sandbox/work/
+sandbox/pi-config/
+config.json
+*.log
+.wwebjs_cache/

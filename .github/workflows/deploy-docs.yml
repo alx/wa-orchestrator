@@ -1,0 +1,38 @@
+# Publish the static docs site (docs/) to GitHub Pages via the gh-pages branch.
+name: deploy-docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish docs/ to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          SHA=$(git rev-parse HEAD)
+          git checkout --orphan _gh_tmp
+          git rm -rf .
+          cp -r docs/. ./
+          git add .
+          git commit -m "docs: publish from $SHA"
+          # checkout@v4 rewrites origin to use GITHUB_TOKEN
+          git push -f origin _gh_tmp:gh-pages
+          git checkout main
+          git branch -D _gh_tmp
