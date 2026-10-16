@@ -1,15 +1,18 @@
 [Unit]
 Description=wa-orchestrator — multi-group WhatsApp orchestrator (wwebjs client + sandboxed pi brains)
-# USER-scoped unit (installed to ~/.config/systemd/user/). alx has
+# USER-scoped unit (installed to ~/.config/systemd/user/). The user has
 # Linger=yes, so it runs without a login session.
 # One WhatsApp account, N registered groups, one brain per group.
-# Never run two instances at once (one client per WhatsApp account) —
-# this includes the legacy ai-slop-wa service (same account).
+# Never run two instances at once (one client per WhatsApp account).
+#
+# TEMPLATE — substitute before install:
+#   <HOME>        → your absolute home dir, e.g. /home/<you>
+#   <NODE_BIN>    → absolute path to the node binary that runs on PATH here
 
 [Service]
 Type=simple
-WorkingDirectory=/home/alx/code/wa-orchestrator
-ExecStart=/bin/bash -c 'exec xvfb-run -a /home/alx/.nvm/versions/node/v22.19.0/bin/node /home/alx/code/wa-orchestrator/index.js'
+WorkingDirectory=<HOME>/code/wa-orchestrator
+ExecStart=/bin/bash -c 'exec xvfb-run -a <NODE_BIN> <HOME>/code/wa-orchestrator/index.js'
 Restart=always
 RestartSec=15
 

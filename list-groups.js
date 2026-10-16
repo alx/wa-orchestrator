@@ -2,7 +2,7 @@
 /**
  * list-groups.js — one-shot probe: list the WA account's groups (JID + name).
  *
- * Run DURING A MAINTENANCE WINDOW (ai-slop-wa/wa-orchestrator stopped — only one
+ * Run DURING A MAINTENANCE WINDOW (bot stopped — only one
  * wwebjs client may hold the account at a time):
  *
  *   cd wa-orchestrator && xvfb-run -a node list-groups.js

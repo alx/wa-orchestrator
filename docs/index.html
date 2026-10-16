@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>wa-orchestrator — orchestrateur WhatsApp multi-groupes</title>
-<meta name="description" content="Un processus, un compte WhatsApp, N groupes, un cerveau par groupe. Agent pi sandboxé dans Docker.">
+<title>wa-orchestrator — multi-group WhatsApp orchestrator</title>
+<meta name="description" content="One process, one WhatsApp account, N groups, one brain per group. Sandboxed pi agent in Docker.">
 <style>
 :root { --ink:#1a1a1a; --accent:#FAB617; --cream:#F5EFE4; --line:#e2ded4; }
 body { margin:0; font:16px/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--cream); }
@@ -31,64 +31,69 @@ footer { margin-top:3rem; font-size:.85rem; opacity:.7; }
 </head>
 <body>
 <header class="hero"><div class="inner">
-<h1>wa-orchestrator <span class="tag">1 processus · N groupes</span></h1>
-<p class="sub">Un compte WhatsApp, des groupes enregistrés, et un <strong>cerveau par
-groupe</strong> : agent <a href="https://pi.dev">pi</a> 1.2.0 exécuté dans un
-conteneur Docker sandboxé, modèle LLM verrouillé.</p>
+<h1>wa-orchestrator <span class="tag">1 process · N groups</span></h1>
+<p class="sub">One WhatsApp account, registered groups, and a <strong>brain per
+group</strong>: a <a href="https://pi.dev">pi</a> 1.2.0 agent run inside a
+sandboxed Docker container, with a locked LLM model.</p>
 </div></header>
 <main>
 
 <h2>Architecture</h2>
-<div class="flow">WhatsApp ──wwebjs──▶ index.js ──par groupe──▶ brain.js ──docker──▶ conteneur
- (1 compte)          registre                 docker run           agent pi
-                                                            ├─ beads (lecture seule)
-                                                            ├─ outils (git, hugo…)
-                                                            └─ 1 cerveau ≠ 1 groupe</div>
-<p>Le cerveau est choisi <strong>par groupe</strong> (champ <code>brain</code> du
-registre), pas par message ni par serveur. Deux profils livrés :</p>
+<div class="flow">WhatsApp ──wwebjs──▶ index.js ──per group──▶ brain.js ──docker──▶ container
+ (1 account)          registry                 docker run           pi agent
+                                                            ├─ beads (read-only)
+                                                            ├─ tools (git, hugo…)
+                                                            └─ 1 brain ≠ 1 group</div>
+<p>The brain is chosen <strong>per group</strong> (the <code>brain</code> field
+of the registry), not per message nor per server. Two profiles ship by default:</p>
 <table>
-<tr><th>profil</th><th>free-text <code>pi …</code></th><th>run modes</th></tr>
-<tr><td><code>ai-slop</code></td><td>beads du projet AI Slop</td><td><code>pi run &lt;bead&gt;</code> → artefacts sur branche <code>task/&lt;id&gt;</code></td></tr>
-<tr><td><code>cpo</code></td><td>beads du Centre de la Photographie Ordinaire</td><td><code>pi edit &lt;instruction&gt;</code> → édite le site, build Hugo, <strong>commit + push</strong></td></tr>
+<tr><th>profile</th><th>free-text <code>pi …</code></th><th>run modes</th></tr>
+<tr><td><code>beads-project</code></td><td>project beads (list/create by label)</td><td><code>pi run &lt;bead&gt;</code> → executes the bead, artifacts on branch <code>task/&lt;id&gt;</code></td></tr>
+<tr><td><code>site-project</code></td><td>scoped read-only beads (live Dolt DB, filtered to a set of epics)</td><td><code>pi edit &lt;instruction&gt;</code> → edits the site, verifies the build, <strong>commit + push</strong></td></tr>
 </table>
 
-<h2>Démarrage rapide</h2>
+<h2>Quickstart</h2>
 <pre>npm install
-bash sandbox/build.sh          # image docker (pi, bd, jq, hugo_extended)
-cp config.template.json config.json   # remplir JIDs + chemins
-# unités systemd user-scoped fournies :
+bash sandbox/build.sh          # docker image (pi, bd, jq, hugo_extended)
+cp config.template.json config.json   # fill JIDs + absolute paths
+cp brain-prompts.template.json brain-prompts.json   # adapt prompts
+# user-scoped systemd units provided (fill &lt;HOME&gt;/&lt;NODE_BIN&gt;):
 systemctl --user enable --now wa-orchestrator wa-orchestrator-dashboard</pre>
-<p>Prérequis : docker, <code>xvfb-run</code>, Chromium système, node ≥ 22.
-La session WhatsApp vit dans <code>sessions/</code> — <strong>un seul client
-par compte</strong>, jamais deux instances en même temps.</p>
+<p>Prereqs: docker, <code>xvfb-run</code>, system Chromium, node ≥ 22.
+The WhatsApp session lives in <code>sessions/</code> — <strong>one client per
+account</strong>, never two instances at once. Prompts load from
+<code>brain-prompts.json</code> (gitignored); without it the bot falls back to
+minimal generic built-in prompts.</p>
 
-<h2>Extension</h2>
+<h2>Extending</h2>
 <ul>
-<li><strong>Ajouter un groupe</strong> = une entrée <code>{"jid", "name", "brain"}</code>
-dans <code>groups[]</code> + redémarrage. JID : premier message du groupe, ou
-<code>xvfb-run -a node discover.js</code> en fenêtre de maintenance.</li>
-<li><strong>Ajouter un cerveau</strong> = un profil dans <code>brains{}</code>
-(dossier beads, prompt, run modes) pointé depuis le registre.</li>
+<li><strong>Add a group</strong> = one entry <code>{"jid", "name", "brain"}</code>
+in <code>groups[]</code> + a restart. JID: first message from the group, or
+<code>xvfb-run -a node discover.js</code> during a maintenance window.</li>
+<li><strong>Add a brain</strong> = one profile in <code>brains{}</code>
+(beads repo, prompt entries, run modes) pointed at by the registry.</li>
 </ul>
 
-<h2>Sécurité</h2>
+<h2>Security</h2>
 <ul>
-<li>Tous les membres d'un groupe enregistré peuvent commander (pas d'auth par membre).</li>
-<li>Run modes d'écriture scopés par prompt : édits minimaux, build avant push,
-jamais de force-push, jamais <code>.github/</code>.</li>
-<li>Credentials matérialisées dans le conteneur, jamais dans le repo
-(<code>config.json</code> gitignored, seuls des templates sont publiés).</li>
-<li>Tout est tracé : <code>activity/activity.jsonl</code> + dashboard <code>:8093</code>.</li>
+<li>Every member of a registered group can command the bot (no per-member auth).</li>
+<li>Write-capable run modes are scoped in the prompt: minimal edits, build
+before push, never force-push, never <code>.github/</code>.</li>
+<li>Credentials are materialized inside the container, never in the repo
+(<code>config.json</code> and <code>brain-prompts.json</code> gitignored; only
+templates are published).</li>
+<li>Everything is traced: <code>activity/activity.jsonl</code> + dashboard
+<code>:8093</code>.</li>
 </ul>
 
-<h2>Paquet pi / npm</h2>
-<p>Publié comme <a href="https://pi.dev/docs/latest/packages"><em>pi
-package</em></a> (keyword <code>pi-package</code>, manifest <code>pi</code>) :
-<code>pi install npm:wa-orchestrator</code> installe le daemon et la skill
-d'exploitation.</p>
+<h2>Pi package / npm</h2>
+<p>Distributed as a <a href="https://pi.dev/docs/latest/packages"><em>pi
+package</em></a> (keyword <code>pi-package</code>, manifest <code>pi</code>):
+<code>pi install npm:wa-orchestrator</code> installs the daemon and the
+operations skill.</p>
 
-<footer>repo : <a href="https://github.com/alx/wa-orchestrator">github.com/alx/wa-orchestrator</a> —
-docs publiées depuis la branche <code>gh-pages</code></footer>
+<footer>repo: <a href="https://github.com/alx/wa-orchestrator">github.com/alx/wa-orchestrator</a> —
+docs published from the <code>gh-pages</code> branch</footer>
 </main>
 </body>
 </html>

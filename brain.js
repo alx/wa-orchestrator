@@ -10,16 +10,18 @@
  * The container's pi knows exactly ONE model (the lock) and ONE provider (gd).
  *
  * Brain profiles (config.brains):
- *   kind "beads" — ai-slop: container-local beads repo, list/create by label,
- *                  run mode "run <bead-id>" → executes the bead, artifacts →
- *                  Gitea task/<id> branch (behavior inherited from ai-slop-wa).
- *   kind "cpo"   — Centre de la Photographie Ordinaire: the LIVE project beads
- *                  DB /home/alx/org mounted at /workspace (agent is READ-ONLY:
- *                  bd list/show on the org-9s8 + org-a0s5 trees), and run mode
- *                  "edit <instruction>" → edits the website-draft checkout
- *                  (/task-site), verifies with hugo, commits + pushes origin
- *                  main (→ GitHub Pages deploy).
- */
+ *   kind "beads" — a beads repo mounted at /workspace; list/create beads by
+ *                  label, run mode "run <bead-id>" → executes the bead,
+ *                  artifacts → task/<id> branch of the project remote.
+ *   kind "cpo"   — a LIVE project beads DB mounted at /workspace (agent is
+ *                  READ-ONLY: bd list/show scoped to a set of epics), plus
+ *                  run mode "edit <instruction>" → edits the site checkout
+ *                  (/task-site), verifies the build, commits + pushes origin main.
+ *
+ * Prompts are NOT hardcoded in this file: they are rendered from
+ * brain-prompts.json (gitignored, per deployment). When that file is missing,
+ * minimal generic built-in prompts (GENERIC_PROMPTS) are used and a warning
+ * is logged. Published starting point: brain-prompts.template.json. */
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -76,94 +78,82 @@ function materializeGitHome() {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt builders
+// Prompt templates — loaded from brain-prompts.json (gitignored, per-deploy),
+// falling back to minimal generic prompts. {{placeholder}} rendering.
 // ---------------------------------------------------------------------------
+const PROMPTS_FILE = CFG.promptsFile || path.join(__dirname, 'brain-prompts.json');
+let _prompts = null;
 
-// Exact one-liner the in-container agent uses to list the CPO beads.
+// Minimal safe defaults (no project names) used when no prompts file exists.
+const GENERIC_PROMPTS = {
+  'beads.ask':
+    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.\n' +
+    'You may only: 1) LIST/SHOW beads with the label "{{label}}" (read-only), e.g. `bd list --label {{label}} -s open` or `bd show <id>`; 2) CREATE a bead: `bd create "<concise title>" -l {{label}} --no-inherit-labels --parent {{parentEpic}}`.\n' +
+    'Use ONLY the `bd` CLI; never modify any files. Never touch beads without the "{{label}}" label. Reply with SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
+  'beads.run':
+    'You are "{{botName}}" executing bead {{beadId}} INSIDE THIS SANDBOX. No user is present — finish the work end to end.\n' +
+    'The bead (your spec):\n---\n{{beadSpec}}\n---\n' +
+    'Environment: /task = your read-write work area (put ALL produced files here); /workspace = the beads repo (read-only, except bd show/comment/close on {{beadId}}).\n' +
+    'Implement exactly what the bead asks; if it is code, actually RUN it to verify before finishing.\n' +
+    'When done AND verified: bd comment {{beadId}} "<2-3 line summary>" then bd close {{beadId}}. If blocked: bd comment {{beadId}} "blocked: <why>" and do NOT close.\n' +
+    'Final chat message (posted verbatim to the WhatsApp group): 1-3 short plain lines.',
+  'cpo.ask':
+    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.\n' +
+    'The project beads are exactly the epics {{epics}} WITH ALL THEIR CHILDREN (an id belongs if it equals an epic id or starts with "<epic-id>."). To list them use this exact recipe (copy verbatim): {{recipe}}  — to show one: `bd show <id>`; one epic\'s subtree: `bd list --parent <epic-id> -s all`.\n' +
+    'You are READ-ONLY: never create, update, close, claim, comment, sync or delete anything, and never modify any file. If a bd command fails with a lock/gate error, retry it once.\n' +
+    'Answer in the language of the request. SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
+  'cpo.edit':
+    'You are "{{botName}}" editing the project website (Hugo site). You are inside a sandbox. The site checkout is at /task-site — a git repository, branch main, remote origin = the production repository.\n' +
+    "Member's request (from the WhatsApp group):\n---\n{{instruction}}\n---\n" +
+    'Environment: /task-site = the Hugo website (read-write); `hugo` is installed (same extended version as the deploy workflow); git is configured; use `git -C /task-site ...`.\n' +
+    'Workflow (do ALL steps yourself, in order):\n' +
+    '1. Understand the request. If it is AMBIGUOUS or DESTRUCTIVE, do NOT touch git — reply with ONE short clarifying question instead.\n' +
+    '2. Read the relevant files first.\n' +
+    '3. Make the MINIMAL correct change(s), keeping the existing structure, language and visual style.\n' +
+    '4. Verify the build: cd /task-site && {{siteBuildCmd}} — if it fails, FIX your change before going further. Never push a broken build.\n' +
+    '5. git -C /task-site add -A && git -C /task-site commit -m "<short summary>" && git -C /task-site push origin main\n' +
+    '6. SHA: git -C /task-site rev-parse --short HEAD\n' +
+    'Hard rules: NEVER force-push; never push any branch but main; never modify .github/ or the deploy workflow; never git reset/rebase; never change the baseURL.\n' +
+    'If the push fails, retry ONCE, then report the error. If blocked, do NOT commit — reply with one short line explaining why.\n' +
+    'Final chat message (posted verbatim to the WhatsApp group, plain text), 2-4 short lines: what you changed, commit <SHA>, live at {{siteLiveUrl}} in ~1 minute.',
+};
+
+function getPrompts() {
+  if (_prompts) return _prompts;
+  try {
+    _prompts = Object.assign({}, GENERIC_PROMPTS, JSON.parse(fs.readFileSync(PROMPTS_FILE, 'utf8')));
+    log('prompts loaded from', PROMPTS_FILE);
+  } catch {
+    _prompts = GENERIC_PROMPTS;
+    log('WARNING: no prompts file at', PROMPTS_FILE, '— using generic built-in prompts');
+  }
+  return _prompts;
+}
+
+function render(tpl, vars) {
+  return String(tpl).replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : ''));
+}
+
+function buildBeadsPrompt(ask, brain) {
+  const P = getPrompts();
+  return render(P['beads.ask'], { botName: brain.botName || 'Bot', label: brain.beadsLabel, parentEpic: brain.beadsParentEpic, ask });
+}
+
+// Exact one-liner the in-container agent uses to list the scoped beads.
 function cpoListRecipe(epics) {
   const epicsJson = JSON.stringify(epics); // double-quoted → safe inside shell single quotes
   return `bd list -s all --json --brief 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(d);const E=${epicsJson};const x=a.filter(b=>E.some(e=>b.id===e||b.id.startsWith(e+".")));for(const b of x)console.log(b.id+" ["+b.status+"] P"+b.priority+" "+b.title)}catch(e){console.log("filter error:",e.message)}})'`;
 }
 
-function buildBeadsPrompt(ask, brain) {
-  return [
-    `You are "AI Slop Bot", a WhatsApp group assistant. You manage beads (issue tracker) for the AI Slop channel using the \`bd\` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.`,
-    '',
-    'You may only do these two things:',
-    `1. LIST/SHOW beads with the label "${brain.beadsLabel}" (read-only), e.g. \`bd list --label ${brain.beadsLabel} -s open\` or \`bd show <id>\`.`,
-    `2. CREATE a new bead: \`bd create "<concise title>" -l ${brain.beadsLabel} --no-inherit-labels --parent ${brain.beadsParentEpic}\`. Write the title yourself, concise, from the member's request.`,
-    '',
-    'Hard rules:',
-    '- Use ONLY the `bd` CLI. Never modify any files. Never run any other command.',
-    `- Never touch beads without the "${brain.beadsLabel}" label. Never close or edit existing beads.`,
-    '- Reply with SHORT plain WhatsApp text only (no markdown tables, no code blocks). Your reply is posted verbatim to the group.',
-    '- Lists: EXACTLY one item per line, each starting with "\u2022 ". Never pack two items on the same line. If a list has more than 5 items, list the first 5 and end with "\u2022 (\u2026and N more)".',
-    '- If the request is unclear or out of scope, reply with one short clarifying line.',
-    '',
-    'Request from a group member:',
-    ask,
-  ].join('\n');
-}
-
 function buildCpoPrompt(ask, brain) {
-  const recipe = cpoListRecipe(brain.epics);
-  return [
-    'You are "CPO Bot", the WhatsApp group assistant of the Centre de la Photographie Ordinaire. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.',
-    '',
-    `The CPO beads are exactly the epics ${brain.epics.join(' and ')} WITH ALL THEIR CHILDREN (an id belongs to CPO if it equals an epic id or starts with "<epic-id>.")`,
-    '',
-    'To list the CPO beads, use this exact recipe (copy it verbatim):',
-    '  ' + recipe,
-    'To show one bead:  bd show <id>',
-    `To list one epic's subtree:  bd list --parent <epic-id> -s all`,
-    '',
-    'You are READ-ONLY: never create, update, close, claim, comment, sync or delete anything, and never modify any file. Only bd list/show.',
-    'If a bd command fails with a lock/gate error, wait a moment and retry it once.',
-    '',
-    'Answer in the language of the request (French question → French answer). SHORT plain WhatsApp text only (no markdown tables, no code blocks). Your reply is posted verbatim to the group.',
-    'Lists: EXACTLY one item per line, each starting with "\u2022 ". If more than 8 items, give the 8 most relevant and end with "\u2022 (\u2026et N autres)".',
-    '',
-    'Request from a group member:',
-    ask,
-  ].join('\n');
+  const P = getPrompts();
+  return render(P['cpo.ask'], { botName: brain.botName || 'Bot', epics: brain.epics.join(' and '), recipe: cpoListRecipe(brain.epics), ask });
 }
 
 function buildSitePrompt(instruction, brain) {
-  return [
-    'You are "CPO Bot" editing the website of the Centre de la Photographie Ordinaire (Hugo site). You are inside a sandbox. The site checkout is at /task-site — a git repository, branch main, remote origin = the production GitHub repository.',
-    '',
-    "Member's request (from the WhatsApp group):",
-    '---',
-    instruction,
-    '---',
-    '',
-    'Environment:',
-    '- /task-site = the Hugo website (read-write). Pages in content/, templates in layouts/, assets in static/.',
-    '- `hugo` is installed (same extended version as the deploy workflow).',
-    '- git is configured (identity + github credential); use `git -C /task-site ...`.',
-    '',
-    'Workflow (do ALL steps yourself, in order):',
-    '1. Understand the request. If it is AMBIGUOUS or DESTRUCTIVE (deleting content/pages, restructuring the site), do NOT touch git — reply with ONE short clarifying question instead.',
-    '2. Read the relevant files first (content/*.md, layouts/, static/style.css, config).',
-    '3. Make the MINIMAL correct change(s). This is a live French client site: keep the existing structure, French language, and visual style (CSS variables, DIN titles, yellow #FAB617 accent).',
-    `4. Verify the site still builds: cd /task-site && ${CFG.brains.cpo.siteBuildCmd}`,
-    '   If the build fails, FIX your change before going further. Never push a broken build.',
-    '5. git -C /task-site add -A && git -C /task-site commit -m "<short French summary>" && git -C /task-site push origin main',
-    '6. SHA: git -C /task-site rev-parse --short HEAD',
-    '',
-    'Hard rules:',
-    '- NEVER force-push. NEVER push any branch but main. NEVER modify .github/ or the deploy workflow. NEVER git reset/rebase.',
-    '- Never change the baseURL or the deploy configuration.',
-    '- If the push fails, retry ONCE, then report the error (no workarounds).',
-    '- If the request is impossible or blocked, do NOT commit — reply with one short line explaining why.',
-    '',
-    'Final chat message (posted verbatim to the WhatsApp group — plain text, French if the request was in French), 2-4 short lines:',
-    '- what you changed (which files, one-line why)',
-    '- commit <SHA>',
-    `- \u2192 observable sur ${CFG.brains.cpo.siteLiveUrl} dans ~1 minute (build GitHub Pages)`,
-  ].join('\n');
+  const P = getPrompts();
+  return render(P['cpo.edit'], { botName: brain.botName || 'Bot', instruction, siteBuildCmd: brain.siteBuildCmd, siteLiveUrl: brain.siteLiveUrl });
 }
-
 function textOfAssistant(msg) {
   const c = msg && msg.content;
   if (typeof c === 'string') return c;
@@ -310,29 +300,12 @@ function bdShow(repoDir, id) {
   return b;
 }
 
-function buildRunPrompt(bead) {
-  const spec = [bead.title, bead.description ? '\n' + bead.description : ''].join('\n').trim();
-  return [
-    `You are "AI Slop Bot" executing bead ${bead.id} INSIDE THIS SANDBOX. No user is present — you must finish the work yourself, end to end.`,
-    '',
-    'The bead (your spec):',
-    '---',
-    spec,
-    '---',
-    '',
-    'Environment:',
-    '- /task = your read-write work area. Put ALL produced files here.',
-    '- /workspace = the beads repo; the `bd` CLI works here. Treat it as read-only.',
-    '',
-    'Rules:',
-    '- Work ONLY in /task. Never write anywhere else in the container.',
-    `- In /workspace you may ONLY run bd show/comment/close on bead ${bead.id}. Never touch any other bead.`,
-    '- Implement exactly what the bead asks. Keep it small, correct and self-contained. If it is code, actually RUN it to verify before finishing.',
-    `- When done AND verified: bd comment ${bead.id} "<2-3 line summary: what was built, which files in /task, how to verify>" then bd close ${bead.id}.`,
-    `- If the spec is impossible or you get genuinely blocked: bd comment ${bead.id} "blocked: <why>" and stop. Do NOT close.`,
-    '',
-    'Final chat message (posted verbatim to the WhatsApp group): 1-3 short plain lines — what you did and (if you produced files) that they are in /task. One item per line if you list anything, each starting with "• ".',
-  ].join('\n');
+function buildRunPrompt(bead, brain) {
+  const P = getPrompts();
+  const nl = String.fromCharCode(10);
+  const spec = [bead.title, bead.description ? nl + bead.description : ""].join(nl).trim();
+  return render(P["beads.run"], { botName: brain.botName || "Bot", beadId: bead.id, beadSpec: spec });
+
 }
 
 function countFiles(dir) {
@@ -399,7 +372,7 @@ async function runBead(rawId, brain) {
   fs.mkdirSync(taskDir, { recursive: true });
 
   const res = await runSandbox({
-    prompt: buildRunPrompt(bead),
+    prompt: buildRunPrompt(bead, brain),
     workspace: brain.beadsRepoDir,
     timeoutMs: CFG.runTimeoutMs,
     extraVolumes: [[taskDir, '/task']],

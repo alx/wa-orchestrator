@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * dashboard.js — zero-dependency HTML dashboard for wa-orchestrator (org-y05d)
+ * dashboard.js — zero-dependency HTML dashboard for wa-orchestrator
  *
- * Serves on :8093 (8092 = ai-slop-dashboard), bound to ALL interfaces
- * (reachable via lamai270's addresses; the box sits on a private tailnet):
- *   /            HTML page: CPO beads (live repo /home/alx/org) + latest bot activity
- *   /api/beads   raw JSON: last good beads snapshot
+ * Serves on :8093 by default (override with DASHBOARD_PORT), bound to ALL
+ * interfaces (box sits on a private tailnet; optional bearer via DASHBOARD_TOKEN):
+ *   /             HTML page: scoped beads (every brain profile with kind
+ *                 "cpo", each filtered to its own epics) + latest bot activity
+ *   /api/beads    raw JSON: last good beads snapshots (one per scope)
  *   /api/activity raw JSON: last N activity events
  *
  * Beads are refreshed in the background every REFRESH_MS by spawning
- * `bd list -s all --json --brief` in /home/alx/org, then filtering the CPO
- * trees (org-9s8 / org-a0s5 + descendants) in-process. If that call fails
- * (e.g. Dolt lock contention while the in-container brain is working), the
- * last good snapshot keeps being served.
+ * `bd list -s all --json --brief` in each scope's repo, then filtering to the
+ * scope's epics in-process. If a call fails (e.g. Dolt lock contention while
+ * an in-container brain is working), the last good snapshot keeps being served.
  *
  * Auto-refresh is a plain <meta refresh> — no JS, no deps.
  */
@@ -23,40 +23,47 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const CFG = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
-const PORT = 8093; // 8092 = ai-slop-dashboard
+const PORT = Number(process.env.DASHBOARD_PORT || 8093);
 const HOST = process.env.DASHBOARD_HOST || '0.0.0.0'; // bind host-wide
 const TOKEN = process.env.DASHBOARD_TOKEN || ''; // optional: require ?token=<TOKEN> when set
 const REFRESH_MS = 30000; // beads snapshot refresh
 const ACTIVITY_TAIL = 25; // events shown / served
 const ACTIVITY_FILE = CFG.activityLog;
 const BD_BIN = process.env.BD_BIN || 'bd';
-const CPO_EPICS = (CFG.brains.cpo && CFG.brains.cpo.epics) || ['org-9s8', 'org-a0s5'];
-const CPO_REPO = (CFG.brains.cpo && CFG.brains.cpo.beadsRepoDir) || '/home/alx/org';
-const isCpo = (id) => CPO_EPICS.some((e) => id === e || id.startsWith(e + '.'));
 
-// ---------------- beads snapshot ----------------
-let beadsCache = { ts: 0, error: null, items: [] };
-function refreshBeads() {
+// One "scope" per brain profile of kind "cpo": its beads repo + epic filter.
+const SCOPES = Object.entries(CFG.brains || {})
+  .filter(([, v]) => v && v.kind === 'cpo' && v.beadsRepoDir)
+  .map(([name, v]) => ({ name, repo: v.beadsRepoDir, epics: v.epics || [] }));
+
+const inScope = (scope, id) => scope.epics.some((e) => id === e || id.startsWith(e + '.'));
+
+// ---------------- beads snapshots (per scope) ----------------
+const caches = new Map(); // scope.name → { ts, error, items }
+for (const s of SCOPES) caches.set(s.name, { ts: 0, error: null, items: [] });
+
+function refreshScope(scope) {
   const child = spawn(BD_BIN, ['list', '-s', 'all', '--json', '--brief'], {
-    cwd: CPO_REPO,
+    cwd: scope.repo,
     env: { ...process.env, NO_COLOR: '1' },
   });
   let out = '';
   child.stdout.on('data', (d) => (out += d));
-  child.on('error', (e) => onBdDone(null, `spawn: ${e.message}`));
-  child.on('close', (code) => onBdDone(code === 0 ? out : null, code === 0 ? null : `bd exited ${code}`));
+  child.on('error', (e) => onBdDone(scope, null, `spawn: ${e.message}`));
+  child.on('close', (code) => onBdDone(scope, code === 0 ? out : null, code === 0 ? null : `bd exited ${code}`));
 }
-function onBdDone(out, err) {
+function onBdDone(scope, out, err) {
+  const prev = caches.get(scope.name);
   if (out) {
     try {
       const all = JSON.parse(out);
-      const items = all.filter((b) => isCpo(b.id));
-      beadsCache = { ts: Date.now(), error: null, items };
+      const items = all.filter((b) => inScope(scope, b.id));
+      caches.set(scope.name, { ts: Date.now(), error: null, items });
     } catch (e) {
-      beadsCache = { ...beadsCache, error: `json: ${e.message}` };
+      caches.set(scope.name, { ...prev, error: `json: ${e.message}` });
     }
   } else if (err) {
-    beadsCache = { ...beadsCache, error: err };
+    caches.set(scope.name, { ...prev, error: err });
   }
 }
 
@@ -112,15 +119,25 @@ function activityRows(events) {
     .join('\n') || '<tr><td colspan="3" class="empty">no activity yet</td></tr>';
 }
 
-function render() {
-  const b = beadsCache;
-  const events = activityTail();
-  const beadCount = b.items.length;
+function scopeSection(scope) {
+  const b = caches.get(scope.name);
   const openCount = b.items.filter((x) => x.status === 'open' || x.status === 'in_progress').length;
+  return `<h2>beads — ${esc(scope.name)} <span class="count">(${b.items.length} total · ${openCount} open · repo ${esc(scope.repo)}, epics ${scope.epics.map(esc).join(' + ')}${scope.epics.length ? ' + descendants' : ''})</span></h2>
+<table><thead><tr><th>id</th><th>title</th><th>status</th><th>pri</th><th>type</th><th>updated</th></tr></thead>
+<tbody>
+${beadRows(b.items)}
+</tbody></table>
+<div class="meta">snapshot ${b.ts ? new Date(b.ts).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : 'n/a'}${b.error ? ` <span class="err">· beads refresh error: ${esc(b.error)} (showing last good snapshot)</span>` : ''}</div>`;
+}
+
+function render() {
+  const totalBeads = [...caches.values()].reduce((n, c) => n + c.items.length, 0);
+  const scopesHtml = SCOPES.map(scopeSection).join('\n');
+  const events = activityTail();
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="10">
-<title>AI Slop — dashboard</title>
+<title>wa-orchestrator — dashboard</title>
 <style>
   :root { color-scheme: dark; }
   body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0d1117; color: #c9d1d9; margin: 0; }
@@ -142,16 +159,11 @@ function render() {
   .empty { color: #57606a; }
   .count { color: #57606a; font-weight: normal; font-size: 12px; }
 </style></head><body><div class="wrap">
-<h1>📷 CPO <span class="dim">— beads + bot activity (refreshes every 10s)</span></h1>
+<h1>📡 wa-orchestrator <span class="dim">— scoped beads + bot activity (refreshes every 10s)</span></h1>
 <div class="meta">
-  beads: ${beadCount} total · ${openCount} open · snapshot ${b.ts ? new Date(b.ts).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : 'n/a'}
-  ${b.error ? `<span class="err"> · beads refresh error: ${esc(b.error)} (showing last good snapshot)</span>` : ''}
+  beads: ${totalBeads} total across ${SCOPES.length} scope(s)
 </div>
-<h2>beads CPO <span class="count">(repo /home/alx/org, arbres org-9s8 + org-a0s5)</span></h2>
-<table><thead><tr><th>id</th><th>title</th><th>status</th><th>pri</th><th>type</th><th>updated</th></tr></thead>
-<tbody>
-${beadRows(b.items)}
-</tbody></table>
+${scopesHtml}
 <h2>latest activity <span class="count">(activity/activity.jsonl)</span></h2>
 <table><thead><tr><th>time</th><th>kind</th><th>text</th></tr></thead>
 <tbody>
@@ -167,10 +179,12 @@ const server = http.createServer((req, res) => {
     res.writeHead(403, { 'content-type': 'text/plain' });
     return res.end('forbidden');
   }
-  const u = url.pathname;
+  const u = req.url.split('?')[0];
   if (u === '/api/beads') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify(beadsCache, null, 1));
+    const out = {};
+    for (const s of SCOPES) out[s.name] = { repo: s.repo, epics: s.epics, ...caches.get(s.name) };
+    return res.end(JSON.stringify(out, null, 1));
   }
   if (u === '/api/activity') {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -184,6 +198,6 @@ const server = http.createServer((req, res) => {
   res.end(render());
 });
 
-refreshBeads();
-setInterval(refreshBeads, REFRESH_MS);
-server.listen(PORT, HOST, () => console.log(`[dashboard] http://${HOST}:${PORT}/ (beads: ${CPO_REPO} [CPO filter], refresh ${REFRESH_MS / 1000}s, token ${TOKEN ? 'REQUIRED' : 'off'})`));
+for (const s of SCOPES) refreshScope(s);
+setInterval(() => { for (const s of SCOPES) refreshScope(s); }, REFRESH_MS);
+server.listen(PORT, HOST, () => console.log(`[dashboard] http://${HOST}:${PORT}/ (scopes: ${SCOPES.map((s) => s.name).join(', ') || 'none'}, refresh ${REFRESH_MS / 1000}s, token ${TOKEN ? 'REQUIRED' : 'off'})`));

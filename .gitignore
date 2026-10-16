@@ -7,3 +7,4 @@ sandbox/pi-config/
 config.json
 *.log
 .wwebjs_cache/
+brain-prompts.json

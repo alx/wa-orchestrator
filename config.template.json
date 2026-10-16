@@ -1,61 +1,53 @@
 {
+  "_comment": "wa-orchestrator configuration TEMPLATE. Copy to config.json and fill in every <PLACEHOLDER>. Paths must be ABSOLUTE (no ~ expansion at runtime). Keep config.json out of git (it is gitignored).",
   "groups": [
-    {
-      "jid": "__JID__",
-      "name": "AI Slop",
-      "brain": "ai-slop"
-    },
-    {
-      "jid": "__JID__",
-      "name": "C-dl-PO",
-      "brain": "cpo"
-    }
+    { "jid": "<GROUP_JID_1>", "name": "Group A", "brain": "beads-project" },
+    { "jid": "<GROUP_JID_2>", "name": "Group B", "brain": "site-project" }
   ],
   "triggerPrefix": "pi ",
   "botPrefix": "🤖 ",
   "ackMessage": "🤖 on it — the brain is thinking…",
   "dryRun": false,
-  "sessionsDir": "/home/alx/code/wa-orchestrator/sessions",
-  "wwebjsCacheDir": "/home/alx/code/ai-slop-wa/.wwebjs_cache",
+  "sessionsDir": "<HOME>/code/wa-orchestrator/sessions",
+  "wwebjsCacheDir": "<HOME>/code/wa-orchestrator/.wwebjs_cache",
   "chromiumPath": "/usr/bin/chromium",
-  "activityLog": "/home/alx/code/wa-orchestrator/activity/activity.jsonl",
+  "activityLog": "<HOME>/code/wa-orchestrator/activity/activity.jsonl",
   "activityMaxBytes": 1048576,
   "replyTimeoutMs": 300000,
   "runTimeoutMs": 900000,
   "sandboxImage": "wa-orchestrator-sandbox",
-  "modelLock": "qwen3.8-27b-gpu-uncanny",
-  "provider": "gd",
-  "hostPiAgentDir": "/home/alx/.pi/agent",
-  "piConfigDir": "/home/alx/code/wa-orchestrator/sandbox/pi-config",
-  "workDir": "/home/alx/code/wa-orchestrator/sandbox/work",
+  "modelLock": "<MODEL_LOCK_ID>",
+  "provider": "<PROVIDER>",
+  "hostPiAgentDir": "<HOME>/.pi/agent",
+  "piConfigDir": "<HOME>/code/wa-orchestrator/sandbox/pi-config",
+  "workDir": "<HOME>/code/wa-orchestrator/sandbox/work",
   "brains": {
-    "ai-slop": {
+    "beads-project": {
       "kind": "beads",
-      "beadsRepoDir": "/home/alx/code/ai-slop-wa/sandbox/beads",
-      "beadsLabel": "ai-slop",
-      "beadsParentEpic": "org-o15h",
+      "botName": "Project Bot",
+      "beadsRepoDir": "<ABS_PATH_TO_BEADS_REPO>",
+      "beadsLabel": "<BEADS_LABEL>",
+      "beadsParentEpic": "<PARENT_EPIC_ID>",
       "runCmd": "run",
-      "artifactRepoDir": "/home/alx/code/ai-slop-wa",
-      "defaultAsk": "List the current open ai-slop beads."
+      "artifactRepoDir": "<ABS_PATH_TO_PROJECT_GIT_REPO>",
+      "defaultAsk": "List the current open beads."
     },
-    "cpo": {
+    "site-project": {
       "kind": "cpo",
-      "beadsRepoDir": "/home/alx/org",
-      "epics": [
-        "org-9s8",
-        "org-a0s5"
-      ],
+      "botName": "Site Bot",
+      "beadsRepoDir": "<ABS_PATH_TO_LIVE_BEADS_DB>",
+      "epics": ["<EPIC_ID_1>", "<EPIC_ID_2>"],
       "runCmd": "edit",
-      "defaultAsk": "Liste les beads ouverts du Centre de la Photographie Ordinaire (arbres org-9s8 et org-a0s5).",
-      "siteDir": "/home/alx/code/centredelaphotographieordinaire/website-draft",
-      "siteBuildCmd": "hugo build --minify --baseURL \"https://centre-de-la-photographie-ordinaire.github.io/website-draft/\" --destination /tmp/hugo-out",
-      "siteLiveUrl": "https://centre-de-la-photographie-ordinaire.github.io/website-draft/"
+      "defaultAsk": "List the open project beads.",
+      "siteDir": "<ABS_PATH_TO_SITE_CHECKOUT>",
+      "siteBuildCmd": "<SITE_BUILD_COMMAND>",
+      "siteLiveUrl": "https://<SITE_URL>"
     }
   },
-  "gitHomeDir": "/home/alx/code/wa-orchestrator/sandbox/git-home",
-  "hostGitCredentials": "/home/alx/.git-credentials",
+  "gitHomeDir": "<HOME>/code/wa-orchestrator/sandbox/git-home",
+  "hostGitCredentials": "<HOME>/.git-credentials",
   "gitIdentity": {
-    "name": "Alexandre Girard Davila",
-    "email": "git@alexgirard.com"
+    "name": "<COMMITTER_NAME>",
+    "email": "<COMMITTER_EMAIL>"
   }
 }

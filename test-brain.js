@@ -3,7 +3,7 @@
  * test-brain.js — standalone round-trip test of the sandboxed pi brains.
  *
  * Usage:
- *   node test-brain.js [--profile cpo|ai-slop] [ask text...]
+ *   node test-brain.js [--profile <brain-key>] [ask text...]
  *   node test-brain.js --profile cpo --edit "change instruction..."
  */
 'use strict';

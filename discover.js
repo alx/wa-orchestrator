@@ -1,7 +1,7 @@
 'use strict';
 /**
  * discover.js — log the JID of ANY chat that sends a message.
- * Used to find the C-dl-PO group JID (WA Web internals are version-skewed).
+ * Used to discover a group's JID (WA Web internals are version-skewed).
  * Run during a maintenance window: xvfb-run -a node discover.js
  */
 const { Client, LocalAuth } = require('whatsapp-web.js');

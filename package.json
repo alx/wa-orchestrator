@@ -42,7 +42,8 @@
     "wa-orchestrator.service",
     "wa-orchestrator-dashboard.service",
     "docs",
-    "README.md"
+    "README.md",
+    "brain-prompts.template.json"
   ],
   "author": "Alexandre Girard Davila <git@alexgirard.com>",
   "license": "MIT",

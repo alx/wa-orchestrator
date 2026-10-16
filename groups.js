@@ -2,7 +2,7 @@
 /**
  * groups.js — enumerate the WhatsApp account's groups via the raw Web store.
  *
- * RELIABLE path (verified in ai-slop-wa spike, NOTES.md):
+ * RELIABLE path (verified during the build spike, NOTES.md):
  *   window.WWebCollections.Chat.getModelsArray()
  * → chats carry `notify` (the JID) and `groupMetadata.subject` (display name).
  * The wwebjs getChats() layer is broken against current WA Web builds —

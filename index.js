@@ -14,8 +14,8 @@
  * Per group:
  *   - trigger: body === "pi" or starts with "pi " (case-insensitive)
  *   - free text  → that brain's list/ask mode
- *   - "<runCmd> …" (brain.runCmd: "run" for ai-slop beads, "edit" for the
- *     CPO site) → the brain's run mode
+ *   - "<runCmd> …" (brain.runCmd: e.g. "run" for beads work items, "edit"
+ *     for site edits) → the brain's run mode
  *
  * Own-message filter: bot posts are prefixed "🤖 " (stateless) + rolling set
  * of sent remote message ids (self-learning secondary).

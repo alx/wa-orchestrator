@@ -1,101 +1,106 @@
 # wa-orchestrator
 
-**Un processus, un compte WhatsApp, N groupes, un cerveau par groupe.**
+**One process, one WhatsApp account, N groups, one brain per group.**
 
-wa-orchestrator est un bot WhatsApp multi-groupes : un client
-[whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) (Chromium +
-Xvfb) écoute des groupes enregistrés et délègue chaque demande à un **cerveau
-= agent [pi](https://pi.dev) 1.2.0 exécuté dans un conteneur Docker
-sandboxé**, avec modèle LLM verrouillé.
+wa-orchestrator is a multi-group WhatsApp bot: a
+[whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) client
+(Chromium + Xvfb) listens on registered groups and delegates every request to
+a **brain = a [pi](https://pi.dev) 1.2.0 agent running inside a sandboxed
+Docker container**, with a locked LLM model.
 
-L'orchestrateur est extensible par construction : **ajouter un groupe = une
-entrée dans le registre**, ajouter une capacité = un profil de cerveau.
+The orchestrator is extensible by construction: **adding a group = one
+registry entry**, adding a capability = one brain profile.
 
 ```
- WhatsApp ──wwebjs──▶ index.js ──par groupe──▶ brain.js ──docker──▶ conteneur
-  (1 compte)          registre                docker run            agent pi
-                                              wa-orchestrator-      ├── beads (lecture seule)
-                                              sandbox               ├── tools (git, hugo, …)
-                                                                    └── 1 cerveau ≠ 1 groupe
+ WhatsApp ──wwebjs──▶ index.js ──per group──▶ brain.js ──docker──▶ container
+ (1 account)          registry                docker run            pi agent
+                                              wa-orchestrator-     ├── beads (read-only)
+                                              sandbox              ├── tools (git, hugo, …)
+                                                                    └── 1 brain ≠ 1 group
 ```
 
-## Cerveaux (profils)
+## Brains (profiles)
 
-| profil | free-text `pi …` | run modes |
+| profile | free-text `pi …` | run modes |
 |---|---|---|
-| `ai-slop` | beads du projet AI Slop | `pi run <bead>` → exécute le bead, artefacts → branche `task/<id>` |
-| `cpo` | beads du Centre de la Photographie Ordinaire (base vivante Dolt, arborescences scopées) | `pi edit <instruction>` → édite le site, build Hugo, **commit + push** sur `origin/main` |
+| `beads-project` | list/create beads by label in a beads repo | `pi run <bead>` → executes the bead, artifacts → `task/<id>` branch |
+| `site-project` | scoped read-only beads (a live Dolt DB, filtered to a set of epics) | `pi edit <instruction>` → edits the site checkout, verifies the build, **commit + push** to `origin/main` |
 
-Le cerveau est choisi **par groupe** (champ `brain` du registre) — pas par
-message, pas par serveur.
+The brain is chosen **per group** (the `brain` field of the registry) — not
+per message, not per server.
 
-## Démarrage rapide
+## Quickstart
 
-Prérequis : `docker`, `xvfb` (`xvfb-run`), Chromium système, node ≥ 22.
+Prereqs: `docker`, `xvfb` (`xvfb-run`), system Chromium, node ≥ 22.
 
 ```bash
 npm install
-# 1. Image sandbox (pi 1.2.0, bd, jq, hugo_extended — voir sandbox/Dockerfile)
+# 1. Sandbox image (pi 1.2.0, bd, jq, hugo_extended — see sandbox/Dockerfile)
 bash sandbox/build.sh
-# 2. Config : partir du template, remplir JIDs + chemins
+# 2. Config: start from the template, fill in JIDs + absolute paths
 cp config.template.json config.json
-#    JID d'un groupe : le log de la 1re message du groupe le montre,
-#    ou `xvfb-run -a node discover.js` pendant une fenêtre de maintenance
-# 3. Services (unités fournies, user-scoped)
+#    A group's JID shows up in the log of its first message, or run
+#    `xvfb-run -a node discover.js` during a maintenance window
+# 3. Services (template units provided, user-scoped — fill <HOME>/<NODE_BIN>)
 cp wa-orchestrator.service wa-orchestrator-dashboard.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now wa-orchestrator wa-orchestrator-dashboard
 ```
 
-La session WhatsApp vit dans `sessions/` (LocalAuth). **Un seul client par
-compte** : ne jamais lancer deux instances (ni l'ancienne `ai-slop-wa`) en
-même temps.
+The WhatsApp session lives in `sessions/` (LocalAuth). **One client per
+account**: never run two instances at the same time (a previous bot using the
+same account included).
 
-## Extension
+Prompts are loaded from `brain-prompts.json` (gitignored, per deployment);
+start from `brain-prompts.template.json`. Without it the bot falls back to
+minimal generic built-in prompts and logs a warning.
 
-### Ajouter un groupe
-1. Récupérer le JID (message entrant ou `discover.js`).
-2. Ajouter `{"jid": "...@g.us", "name": "Mon groupe", "brain": "cpo"}` dans
-   `config.json` → `groups[]`.
-3. Redémarrer le service. C'est tout.
+## Extending
 
-### Ajouter un cerveau
-Ajouter un profil dans `config.json` → `brains{}` (répertoire beads, prompt,
-run modes) et le pointer depuis une entrée du registre.
+### Adding a group
+1. Get the JID (from an inbound message, or `discover.js`).
+2. Add `{"jid": "...@g.us", "name": "My group", "brain": "site-project"}` to
+   `groups[]` in `config.json`.
+3. Restart the service. That's it.
 
-## Sécurité
+### Adding a brain
+Add a profile to `brains{}` in `config.json` (repo paths, prompts file
+entries, run mode) and point a registry entry at it.
 
-- **Tous les membres d'un groupe enregistré peuvent commander** (pas d'auth
-  par membre) — par conception héritée.
-- Les run modes qui écrivent (ex. `pi edit` → push production) sont
-  **scopés dans le prompt** du conteneur : édits minimaux, build obligatoire
-  avant push, jamais de force-push, jamais de fichier `.github/`.
-- Les credentials git des run modes sont **matérialisées dans le conteneur**
-  (`sandbox/git-home/`), jamais dans le repo.
-- Tout est tracé : `activity/activity.jsonl` (asks, replies, run modes) +
-  dashboard `:8093`.
-- Le repo ne contient **aucun secret** : `config.json` est gitignored, seul
-  `config.template.json` (placeholders) est publié.
+## Security
 
-## Exploitation
+- **Every member of a registered group can command the bot** (no per-member
+  auth) — accepted by design.
+- Write-capable run modes (e.g. `pi edit` → push to production) are **scoped
+  in the in-container prompt**: minimal edits, mandatory build before push,
+  never force-push, never touch `.github/`.
+- Git credentials for run modes are **materialized inside the container**
+  (`sandbox/git-home/`), never in the repo.
+- Everything is traced: `activity/activity.jsonl` (asks, replies, run modes)
+  + dashboard on `:8093`.
+- The repo contains **no secrets**: `config.json` and `brain-prompts.json`
+  are gitignored; only `config.template.json` and `brain-prompts.template.json`
+  (placeholders) are published.
+
+## Operations
 
 ```bash
 systemctl --user status wa-orchestrator wa-orchestrator-dashboard
 journalctl --user -f -u wa-orchestrator
 curl -s localhost:8093/healthz          # → ok
-node test-brain.js --profile cpo "Quels beads ouverts ?"
-# Self-test complet (env) : le bot s'évalue dans chaque groupe listé
-SELFTEST_GROUP="AI Slop,C-dl-PO" node index.js
+node test-brain.js --profile site-project "Which beads are open?"
+# Full self-test (env): the bot pings each listed group through itself
+SELFTEST_GROUP="Group A,Group B" node index.js
 ```
 
-**Rollback** : arrêter `wa-orchestrator`, relancer l'ancienne unité
-(`ai-slop-wa`) — même compte, même session, aucun re-QR.
+**Rollback**: stop `wa-orchestrator` and start the previous unit — same
+account, same session, no re-QR.
 
-## Développeurs
+## Developers
 
-- `npm pack` prépare le paquet ; publication depuis une machine avec token
-  npm (`npm publish`). Paquet distribué comme **pi package** (keyword
-  `pi-package`, manifest `pi`) : `pi install npm:wa-orchestrator` installe le
-  daemon + la skill d'exploitation.
-- Docs statiques : `docs/` → publiée sur GitHub Pages par
-  `.github/workflows/deploy-docs.yml` (branche `gh-pages`).
+- `npm pack` prepares the package; publishing happens from a machine holding
+  an npm token (`npm publish`). It is distributed as a **pi package**
+  (keyword `pi-package`, `pi` manifest): `pi install npm:wa-orchestrator`
+  installs the daemon + the operations skill.
+- Static docs: `docs/` → published to GitHub Pages by
+  `.github/workflows/deploy-docs.yml` (branch `gh-pages`).

@@ -1,5 +1,5 @@
-# wa-orchestrator-sandbox — pi brain sandbox for the unified WhatsApp bot (org-y05d).
-# Based on ai-slop-wa/sandbox/Dockerfile, adds:
+# wa-orchestrator-sandbox — pi brain sandbox for the unified WhatsApp bot.
+# Adds (vs the base spike image):
 #   - jq (JSON filtering for bd --json output)
 #   - hugo_extended 0.159.0 (EXACTLY the version used by website-draft's
 #     .github/workflows/deploy.yml — the brain builds the site the same way
@@ -17,8 +17,8 @@ RUN apt-get update \
 COPY bd /usr/local/bin/bd
 RUN chmod +x /usr/local/bin/bd
 
-# gd provider extension package (native pi provider for api.girard-davila.net).
-# Staged by build.sh from /home/alx/code/pi-provider-gd (includes node_modules).
+# Custom provider extension package (native pi provider for the LLM gateway).
+# Staged by build.sh from the provider package directory (includes node_modules).
 COPY pi-provider-gd/ /opt/pi-provider-gd/
 
 # pi coding agent (provides `pi`); docs recommend --ignore-scripts.
@@ -33,8 +33,8 @@ RUN wget -qO /tmp/hugo.tar.gz "https://github.com/gohugoio/hugo/releases/downloa
   && rm /tmp/hugo.tar.gz \
   && hugo version
 
-# Run as uid 1000 (== host user alx) so files written into the MOUNTED
-# repos (beads /home/alx/org, website-draft) stay owned by the host user.
+# Run as uid 1000 (== host user) so files written into the MOUNTED
+# repos (beads repo, site checkout) stay owned by the host user.
 # The official node image ships a `node` user with exactly uid:gid 1000:1000.
 ENV HOME=/home/node
 

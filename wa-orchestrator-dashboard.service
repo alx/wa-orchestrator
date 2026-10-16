@@ -1,10 +1,12 @@
 [Unit]
-Description=wa-orchestrator dashboard (CPO beads + bot activity, :8093)
+Description=wa-orchestrator dashboard (scoped beads + bot activity, :8093)
+# TEMPLATE — substitute <HOME> and <NODE_BIN> before install (see
+# wa-orchestrator.service for what they mean).
 
 [Service]
 Type=simple
-WorkingDirectory=/home/alx/code/wa-orchestrator
-ExecStart=/home/alx/.nvm/versions/node/v22.19.0/bin/node /home/alx/code/wa-orchestrator/dashboard.js
+WorkingDirectory=<HOME>/code/wa-orchestrator
+ExecStart=<NODE_BIN> <HOME>/code/wa-orchestrator/dashboard.js
 Restart=always
 RestartSec=5
 

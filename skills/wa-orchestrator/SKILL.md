@@ -1,43 +1,45 @@
-# wa-orchestrator — exploitation
+# wa-orchestrator — operations
 
-Daemon WhatsApp multi-groupes : un processus, un compte WhatsApp, N groupes
-enregistrés, un cerveau (agent pi sandboxé dans docker) par groupe.
-`pi install npm:wa-orchestrator` donne à l'agent ce guide et les sources.
+Multi-group WhatsApp daemon: one process, one WhatsApp account, N registered
+groups, one brain (a pi agent sandboxed in Docker) per group.
+`pi install npm:wa-orchestrator` gives the agent this guide plus the sources.
 
-## Prérequis hôte
-- docker, `xvfb-run` (xvfb), Chromium système, node ≥ 20.
-- Une image sandbox : `bash sandbox/build.sh` (pi 1.2.0, bd, jq, hugo_extended).
+## Host prerequisites
+- docker, `xvfb-run` (xvfb), system Chromium, node ≥ 20.
+- A sandbox image: `bash sandbox/build.sh` (pi 1.2.0, bd, jq, hugo_extended).
 
-## Installer / lancer
-1. `npm install` (si pas déjà fait dans le paquet).
-2. `cp config.template.json config.json` puis remplir :
-   - `groups[]` : `{jid, name, brain}` — JID = premier message d'un groupe,
-     ou `npm run discover` pendant une fenêtre où AUCUN autre client n'est
-     connecté au compte.
-   - `brains{}` : chemins absolus (dossiers beads, site, git-home), image
-     `sandboxImage`, modèle verrouillé.
-3. Services (user-scoped, fichiers fournis) :
+## Install / start
+1. `npm install` (if not already done in the package).
+2. `cp config.template.json config.json`, then fill:
+   - `groups[]`: `{jid, name, brain}` — JID = first message from a group, or
+     `npm run discover` during a window where NO other client is connected to
+     the account.
+   - `brains{}`: absolute paths (beads repo, site checkout, git-home),
+     `sandboxImage`, the locked model.
+   - `cp brain-prompts.template.json brain-prompts.json`, then adapt the
+     prompt templates to the project (language, labels, epics, URLs).
+3. Services (user-scoped, files provided, fill `<HOME>`/`<NODE_BIN>`):
    `wa-orchestrator.service` + `wa-orchestrator-dashboard.service`
-   (`systemctl --user enable --now …`), ou au foreground :
-   `SELFTEST_GROUP="NomGroupe" xvfb-run -a node index.js`.
+   (`systemctl --user enable --now …`), or foreground:
+   `SELFTEST_GROUP="Group A" xvfb-run -a node index.js`.
 
-## Règles dures
-- **UN seul client par compte WhatsApp** : jamais deux instances (ni un
-  autre bot sur la même session `sessions/`) en même temps.
-- La session vit dans `sessions/` (LocalAuth) — la déplacer = pas de re-QR,
-  la perdre = re-scan QR obligatoire.
-- Le dashboard écoute sur `:8093` (`/healthz` → `ok`).
-- Journal d'activité : `activity/activity.jsonl` (asks, replies, run modes).
+## Hard rules
+- **ONE client per WhatsApp account**: never two instances (nor another bot
+  on the same `sessions/` session) at the same time.
+- The session lives in `sessions/` (LocalAuth) — moving it = no re-QR,
+  losing it = QR re-scan required.
+- The dashboard listens on `:8093` (`/healthz` → `ok`).
+- Activity log: `activity/activity.jsonl` (asks, replies, run modes).
 
-## Étendre
-- **Nouveau groupe** : ajouter une entrée `groups[]` + redémarrer.
-- **Nouveau cerveau** : ajouter un profil `brains{}` (dossier beads scopé,
-  prompt, run modes) et le pointer depuis le registre.
+## Extend
+- **New group**: add a `groups[]` entry + restart.
+- **New brain**: add a `brains{}` profile (scoped beads repo, prompt entries,
+  run modes) and point a registry entry at it.
 
-## Dépanner
-- `group enumeration failed` au démarrage : inoffensif sur les builds récents
-  de WA Web (WWebCollections disparue) ; le fonctionnement n'en dépend pas.
-- `disconnected` + QR : la session a été supplantée — vérifier qu'aucun
-  autre client n'est connecté, relancer, re-scanner si besoin.
-- Run mode `pi edit` : vérifier le push (`git log origin/main` dans le repo
-  cible) et le journal `activity/` ; le diff est affiché dans le groupe.
+## Troubleshooting
+- `group enumeration failed` at startup: harmless on recent WA Web builds
+  (`WWebCollections` removed); nothing depends on it.
+- `disconnected` + QR: the session was superseded — verify no other client is
+  connected, restart, re-scan if needed.
+- Run mode `pi edit`: verify the push (`git log origin/main` in the target
+  repo) and the `activity/` log; the diff is shown in the group.
