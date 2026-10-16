@@ -31,6 +31,8 @@ export interface BrainProfile {
   defaultAsk?: string;
   // cpo profile
   epics?: string[];
+  /** host root for per-group pi conversation session dirs (org-1v4b) */
+  conversationDir?: string;
   siteDir?: string;
   siteBuildCmd?: string;
   siteLiveUrl?: string;

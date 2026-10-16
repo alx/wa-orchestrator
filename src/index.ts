@@ -35,6 +35,7 @@ import { loadConfig, Config, GroupEntry } from './config';
 import { parseAsk, parseRun } from './trigger';
 import { listAccountGroups } from './groups';
 import { runAsk, runRunMode } from './brain';
+import { groupSlug, sessionHostDir, resetSession } from './session';
 
 const CFG: Config = loadConfig();
 
@@ -116,6 +117,24 @@ async function onMessage(m: Message): Promise<void> {
 
   const ask = parseAsk(body);
   if (ask === null) return;
+  const sessionId = groupSlug(remote ?? group.name);
+
+  // Conversation reset (org-1v4b): "new" — rename this group's pi session dir
+  // aside so the next message starts a fresh conversation. Queued so it can
+  // never race an in-flight brain call for the same group.
+  if (ask.trim().toLowerCase() === 'new') {
+    enqueue(async () => {
+      const hostDir = sessionHostDir(brain, sessionId);
+      const did = resetSession(hostDir);
+      log('SESSION RESET', `[${group.name}]`, did ? 'session moved aside' : '(no active session)');
+      activity('session_reset', { group: group.name, from: m.from, sessionId, reset: did });
+      if (!CFG.dryRun) safeSend(remote as string, (CFG.botPrefix ?? '') + (did
+        ? '🧹 conversation reset — starting fresh.'
+        : '🧹 (no active conversation to reset)'));
+    });
+    return;
+  }
+
   // run mode: "<runCmd> <rest>" — e.g. "run org-xxxx" / "edit change X"
   const runArg = parseRun(ask, brain.runCmd as string);
   const isRun = runArg !== null;
@@ -123,7 +142,7 @@ async function onMessage(m: Message): Promise<void> {
 
   log(isRun ? 'RUN' : 'ASK', `[${group.name}]`, 'from', m.from, ':', effectiveAsk.slice(0, 200));
   activity(isRun ? 'run_start' : 'ask', {
-    group: group.name, from: m.from,
+    group: group.name, from: m.from, sessionId,
     ...(isRun ? { runCmd: brain.runCmd, text: effectiveAsk.slice(0, 300) } : { text: effectiveAsk }),
   });
 
@@ -142,11 +161,11 @@ async function onMessage(m: Message): Promise<void> {
       const reply = (CFG.botPrefix ?? '') + pretty;
       if (CFG.dryRun) log('DRY-RUN reply:', reply);
       else safeSend(remote as string, reply);
-      if (isRun) activity('run_done', { group: group.name, from: m.from, ms: Date.now() - t0, meta: res.meta });
-      activity('reply', { group: group.name, from: m.from, text: res.text.slice(0, 500), ms: Date.now() - t0 });
+      if (isRun) activity('run_done', { group: group.name, from: m.from, sessionId, ms: Date.now() - t0, meta: res.meta });
+      activity('reply', { group: group.name, from: m.from, sessionId, text: res.text.slice(0, 500), ms: Date.now() - t0 });
     } catch (e) {
       log('BRAIN FAILED [', group.name, ']:', (e as Error).message);
-      activity('error', { group: group.name, from: m.from, ask: effectiveAsk, error: (e as Error).message.slice(0, 500) });
+      activity('error', { group: group.name, from: m.from, sessionId, ask: effectiveAsk, error: (e as Error).message.slice(0, 500) });
       if (!CFG.dryRun) safeSend(remote as string, (CFG.botPrefix ?? '') + '⚠️ something broke in the brain: ' + (e as Error).message.slice(0, 160));
     }
   });

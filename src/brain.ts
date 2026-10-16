@@ -26,6 +26,7 @@ import { spawn, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig, PROJECT_ROOT, BrainProfile, GroupEntry, Config } from './config';
+import { groupSlug, sessionHostDir, sessionExists } from './session';
 
 const CFG: Config = loadConfig();
 
@@ -109,6 +110,12 @@ let _prompts: Record<string, string> | null = null;
 
 // Minimal safe defaults (no project names) used when no prompts file exists.
 const GENERIC_PROMPTS: Record<string, string> = {
+  'beads.ask.first':
+    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.\n' +
+    'You may only: 1) LIST/SHOW beads with the label "{{label}}" (read-only), e.g. `bd list --label {{label}} -s open` or `bd show <id>`; 2) CREATE a bead: `bd create "<concise title>" -l {{label}} --no-inherit-labels --parent {{parentEpic}}`.\n' +
+    'Use ONLY the `bd` CLI; never modify any files. Never touch beads without the "{{label}}" label. Reply with SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
+  'beads.ask.turn':
+    'Follow-up in the same WhatsApp group conversation — context from earlier turns is already in this session.\n\nRequest:\n{{ask}}\n\nUse what you already know from this conversation; only re-run bd commands when the data may have changed. Reply with SHORT plain WhatsApp text only (lists: one item per line, each starting with "• "). Your final chat message is posted verbatim to the group.',
   'beads.ask':
     'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.\n' +
     'You may only: 1) LIST/SHOW beads with the label "{{label}}" (read-only), e.g. `bd list --label {{label}} -s open` or `bd show <id>`; 2) CREATE a bead: `bd create "<concise title>" -l {{label}} --no-inherit-labels --parent {{parentEpic}}`.\n' +
@@ -120,6 +127,13 @@ const GENERIC_PROMPTS: Record<string, string> = {
     'Implement exactly what the bead asks; if it is code, actually RUN it to verify before finishing.\n' +
     'When done AND verified: bd comment {{beadId}} "<2-3 line summary>" then bd close {{beadId}}. If blocked: bd comment {{beadId}} "blocked: <why>" and do NOT close.\n' +
     'Final chat message (posted verbatim to the WhatsApp group): 1-3 short plain lines.',
+  'cpo.ask.first':
+    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.\n' +
+    'The project beads are exactly the epics {{epics}} WITH ALL THEIR CHILDREN (an id belongs if it equals an epic id or starts with "<epic-id>."). To list them use this exact recipe (copy verbatim): {{recipe}}  — to show one: `bd show <id>`; one epic\'s subtree: `bd list --parent <epic-id> -s all`.\n' +
+    'You are READ-ONLY: never create, update, close, claim, comment, sync or delete anything, and never modify any file. If a bd command fails with a lock/gate error, retry it once.\n' +
+    'Answer in the language of the request. SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
+  'cpo.ask.turn':
+    'Follow-up in the same WhatsApp group conversation — context from earlier turns is already in this session.\n\nRequest:\n{{ask}}\n\nUse what you already know from this conversation (the scoped-beads recipe was given at the start of the session); only re-run bd commands when the data may have changed. Reply with SHORT plain WhatsApp text only (lists: one item per line, each starting with "• "). Your final chat message is posted verbatim to the group.',
   'cpo.ask':
     'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.\n' +
     'The project beads are exactly the epics {{epics}} WITH ALL THEIR CHILDREN (an id belongs if it equals an epic id or starts with "<epic-id>."). To list them use this exact recipe (copy verbatim): {{recipe}}  — to show one: `bd show <id>`; one epic\'s subtree: `bd list --parent <epic-id> -s all`.\n' +
@@ -159,9 +173,25 @@ function render(tpl: unknown, vars: Record<string, unknown>): string {
   return String(tpl).replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : ''));
 }
 
-export function buildBeadsPrompt(ask: string, brain: BrainProfile): string {
+/**
+ * "ask" prompts come in two shapes (org-1v4b):
+ *   *.first — full environment description, sent when the group's pi session
+ *             is empty (turn 1); pi stores it in the session, later turns
+ *             build on it instead of re-describing everything.
+ *   *.turn  — slim continuation: the request + the output rule.
+ * Templates without the split keys fall back to the legacy single prompt.
+ */
+function pickTurnTemplate(P: Record<string, unknown>, base: string, isFirstTurn: boolean): string {
+  const key = isFirstTurn ? `${base}.first` : `${base}.turn`;
+  if (typeof P[key] === 'string') return P[key] as string;
+  console.warn(`[brain] prompts: no "${key}" template — falling back to legacy "${base}"`);
+  return P[base] as string;
+}
+
+export function buildBeadsPrompt(ask: string, brain: BrainProfile, isFirstTurn: boolean): string {
   const P = getPrompts();
-  return render(P['beads.ask'], {
+  const tpl = pickTurnTemplate(P, 'beads.ask', isFirstTurn);
+  return render(tpl, {
     botName: brain.botName || 'Bot',
     label: brain.beadsLabel,
     parentEpic: brain.beadsParentEpic,
@@ -175,10 +205,11 @@ export function cpoListRecipe(epics: string[]): string {
   return `bd list -s all --json --brief 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(d);const E=${epicsJson};const x=a.filter(b=>E.some(e=>b.id===e||b.id.startsWith(e+".")));for(const b of x)console.log(b.id+" ["+b.status+"] P"+b.priority+" "+b.title)}catch(e){console.log("filter error:",e.message)}})'`;
 }
 
-export function buildCpoPrompt(ask: string, brain: BrainProfile): string {
+export function buildCpoPrompt(ask: string, brain: BrainProfile, isFirstTurn: boolean): string {
   const P = getPrompts();
   const epics: string[] = brain.epics ?? [];
-  return render(P['cpo.ask'], {
+  const tpl = pickTurnTemplate(P, 'cpo.ask', isFirstTurn);
+  return render(tpl, {
     botName: brain.botName || 'Bot',
     epics: epics.join(' and '),
     recipe: cpoListRecipe(epics),
@@ -206,18 +237,26 @@ function textOfAssistant(msg: any): string {
 // ---------------------------------------------------------------------------
 // Core docker/pi RPC driver.
 // ---------------------------------------------------------------------------
+/** A group's conversation session (org-1v4b): id for pi, host dir for the volume. */
+export interface GroupSession {
+  id: string;
+  hostDir: string;
+}
+
 interface RunSandboxOpts {
   /** full prompt message */
   prompt: string;
   /** host dir mounted at /workspace */
   workspace: string;
   timeoutMs: number;
+  /** the group's conversation session (org-1v4b) */
+  session: GroupSession;
   /** [hostPath, containerPath] pairs */
   extraVolumes?: [string, string][];
 }
 
 async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs: number }> {
-  const { prompt, workspace, timeoutMs, extraVolumes = [] } = o;
+  const { prompt, workspace, timeoutMs, session, extraVolumes = [] } = o;
   const t0 = Date.now();
   const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
   const gid = typeof process.getgid === 'function' ? process.getgid() : 1000;
@@ -228,9 +267,13 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
     '-e', 'HOME=/home/node',
     '-v', `${workspace}:/workspace`,
     '-v', `${CFG.piConfigDir}:/home/node/.pi/agent`,
+    '-v', `${session.hostDir}:/sessions`, // per-group conversation volume (org-1v4b)
     ...extraVolumes.flatMap(([h, c]) => ['-v', `${h}:${c}`]),
     CFG.sandboxImage as string,
-    '--mode', 'rpc', '--no-session',
+    '--mode', 'rpc',
+    // persistent conversation: pi resumes the same session file per group.
+    // (Anything after the image name is passed to pi, not to docker.)
+    '--session-id', session.id, '--session-dir', '/sessions',
     '--provider', CFG.provider as string,
     '--model', CFG.modelLock as string,
   ];
@@ -326,20 +369,39 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
 // ---------------------------------------------------------------------------
 // Public API — routed by group brain profile.
 // ---------------------------------------------------------------------------
+/** Resolve a group's session: slug from JID + per-group host dir (created). */
+export function groupSession(group: GroupEntry, brain: BrainProfile): GroupSession {
+  const id = groupSlug(group.jid ?? group.name);
+  const hostDir = sessionHostDir(brain, id);
+  // Must exist before docker mounts it (a docker-created dir would be root-owned).
+  fs.mkdirSync(hostDir, { recursive: true });
+  return { id, hostDir };
+}
+
 export async function runAsk(group: GroupEntry, ask: string): Promise<BrainResult> {
   const brain = CFG.brains[group.brain];
   if (!brain) throw new Error(`unknown brain profile "${group.brain}"`);
   materializePiConfig();
-  const prompt = brain.kind === 'cpo' ? buildCpoPrompt(ask, brain) : buildBeadsPrompt(ask, brain);
-  const res = await runSandbox({ prompt, workspace: brain.beadsRepoDir as string, timeoutMs: CFG.replyTimeoutMs as number });
+  const session = groupSession(group, brain);
+  const isFirstTurn = !sessionExists(session.hostDir);
+  const prompt = brain.kind === 'cpo'
+    ? buildCpoPrompt(ask, brain, isFirstTurn)
+    : buildBeadsPrompt(ask, brain, isFirstTurn);
+  const res = await runSandbox({
+    prompt,
+    workspace: brain.beadsRepoDir as string,
+    timeoutMs: CFG.replyTimeoutMs as number,
+    session,
+  });
   return { text: res.text, durationMs: res.durationMs };
 }
 
 export async function runRunMode(group: GroupEntry, arg: string): Promise<BrainResult> {
   const brain = CFG.brains[group.brain];
   if (!brain) throw new Error(`unknown brain profile "${group.brain}"`);
-  if (brain.kind === 'cpo') return runSiteEdit(arg, brain);
-  return runBead(arg, brain);
+  const session = groupSession(group, brain);
+  if (brain.kind === 'cpo') return runSiteEdit(arg, brain, session);
+  return runBead(arg, brain, session);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +466,7 @@ function collectTaskArtifacts(id: string, title: string, brain: BrainProfile): s
   }
 }
 
-async function runBead(rawId: string, brain: BrainProfile): Promise<BrainResult> {
+async function runBead(rawId: string, brain: BrainProfile, session: GroupSession): Promise<BrainResult> {
   const id = String(rawId || '').trim();
   if (!/^[a-z]+-[a-z0-9]{3,10}(\.\d+)?$/i.test(id)) {
     return { text: `That doesn't look like a bead id ("${rawId}"). Usage: pi ${brain.runCmd} <bead-id>` };
@@ -428,6 +490,7 @@ async function runBead(rawId: string, brain: BrainProfile): Promise<BrainResult>
     prompt: buildRunPrompt(bead, brain),
     workspace: brain.beadsRepoDir as string,
     timeoutMs: CFG.runTimeoutMs as number,
+    session,
     extraVolumes: [[taskDir, '/task']],
   });
 
@@ -446,7 +509,7 @@ async function runBead(rawId: string, brain: BrainProfile): Promise<BrainResult>
 // sandbox, verify with hugo, commit + push origin main (→ GitHub Pages).
 // Host-side verification: main must actually have moved, otherwise warn.
 // ---------------------------------------------------------------------------
-async function runSiteEdit(instruction: string, brain: BrainProfile): Promise<BrainResult> {
+async function runSiteEdit(instruction: string, brain: BrainProfile, session: GroupSession): Promise<BrainResult> {
   const instr = String(instruction || '').trim();
   if (!instr) return { text: 'Usage: pi edit <what to change on the site>' };
   let preSha = '';
@@ -459,6 +522,7 @@ async function runSiteEdit(instruction: string, brain: BrainProfile): Promise<Br
     prompt: buildSitePrompt(instr, brain),
     workspace: brain.beadsRepoDir as string, // live CPO beads DB (agent is prompt-scoped read-only)
     timeoutMs: CFG.runTimeoutMs as number,
+    session,
     extraVolumes: [
       [brain.siteDir as string, '/task-site'],
       [path.join(CFG.gitHomeDir as string, '.gitconfig'), '/home/node/.gitconfig'],

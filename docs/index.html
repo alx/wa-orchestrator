@@ -74,6 +74,7 @@ flowchart LR
     PI["pi agent 1.2.0<br/>model locked"]
     FS["mounts: beads (ro) · site checkout · git-home"]
   end
+  SESS[("conversations/<brain>/<group-slug>/<created>_<slug>.jsonl")]
   CFG[("config.json")]
   PROMPTS[("brain-prompts.json")]
   ACT[("activity.jsonl")]
@@ -82,7 +83,8 @@ flowchart LR
   REG -->|group → brain profile| BRAIN
   PROMPTS -.-> BRAIN
   IDX --> BRAIN
-  BRAIN -->|docker run| PI
+  BRAIN -->|"docker run --session-id <slug> --session-dir /sessions"| PI
+  SESS -.->|"/sessions volume (one dir per group)"| PI
   PI <--> FS
   PI -->|final reply text| BRAIN
   BRAIN --> IDX
@@ -106,12 +108,23 @@ sequenceDiagram
   I->>I: trigger check (body = pi or starts with pi )
   I->>WA: sendMessage 🤖 on it — the brain is thinking…
   I->>B: resolve brain (registry: group → profile)
-  B->>C: docker run (prompt rendered from brain-prompts.json + mounts)
+  B->>C: docker run --session-id group-slug --session-dir /sessions (first-turn prompt + mounts)
   C->>C: work (bd list · edit site + hugo build)
   C-->>B: final reply text
   B-->>I: reply
   I->>WA: sendMessage 🤖 {reply}
   WA->>M: reply posted in the group
+  Note over M,C: — later, same group (continuous conversation) —
+  M->>WA: pi {follow-up}
+  WA->>I: message_create
+  I->>B: runAsk (same group → same session id)
+  B->>C: docker run --session-id same-slug (slim turn prompt · session file resumes)
+  C->>C: continues the conversation (context from the session file)
+  C-->>B: final reply text
+  B-->>I: reply
+  I->>WA: sendMessage 🤖 {reply}
+  WA->>M: reply posted in the group
+  Note over M,I: "pi new" → host renames the group's session dir aside → next message = fresh first turn
 </div>
 
 <h2>Quickstart</h2>
@@ -126,6 +139,14 @@ The WhatsApp session lives in <code>sessions/</code> — <strong>one client per
 account</strong>, never two instances at once. Prompts load from
 <code>brain-prompts.json</code> (gitignored); without it the bot falls back to
 minimal generic built-in prompts.</p>
+
+<h2>Conversations (continuous memory per group)</h2>
+<p>Each registered <strong>group</strong> holds one continuous conversation, persisted as a pi session on the host — the bot is <em>not</em> stateless per message. The first turn of a conversation renders the full prompt (<code>*.ask.first</code>: identity, environment, hard rules); every later turn renders a slim continuation (<code>*.ask.turn</code>), because the session already holds the first-turn context. Run-mode calls (<code>run</code>/<code>edit</code>) land in the <em>same</em> group conversation, so a member can ask, order an edit, and check the result across messages.</p>
+<ul>
+<li><strong>Reset:</strong> send <code>pi new</code> in the group — the bot renames the group's session dir aside; the next message starts a fresh first turn.</li>
+<li><strong>Storage:</strong> <code>&lt;conversationDir&gt;/&lt;group-slug&gt;/&lt;created&gt;_&lt;slug&gt;.jsonl</code> per brain profile (one dir per group). Deleting it = amnesia; the bot keeps running.</li>
+<li><strong>Containers stay disposable</strong> (<code>docker run --rm</code>): continuity comes from the session <em>file</em>, and the model lock is re-verified on every start — resumed sessions included.</li>
+</ul>
 
 <h2>Extending</h2>
 <ul>

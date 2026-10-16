@@ -72,6 +72,24 @@ minimal generic built-in prompts and logs a warning.
    `groups[]` in `config.json`.
 3. Restart the service. That's it.
 
+### Conversations (continuous memory per group)
+
+Each registered **group** holds one continuous conversation, persisted as a
+pi session under the brain profile's `conversationDir`:
+`<conversationDir>/<group-slug>/<created>_<slug>.jsonl` (one dir per group).
+
+- **First turn** of a conversation renders the full prompt (`*.ask.first`);
+  **later turns** render a slim continuation (`*.ask.turn`) — the session file
+  already holds the first-turn context.
+- Run-mode calls (`run` / `edit`) land in the **same** group conversation:
+  a member can ask, order an edit, and check the result across messages.
+- **Reset**: send `pi new` in the group — the session dir is renamed aside
+  and the next message starts a fresh first turn. Deleting the dir = amnesia;
+  the bot keeps running.
+- Containers stay disposable (`docker run --rm`): continuity is the session
+  *file*, and the model lock is re-verified on every start, resumed sessions
+  included.
+
 ### Adding a brain
 Add a profile to `brains{}` in `config.json` (repo paths, prompts file
 entries, run mode) and point a registry entry at it.

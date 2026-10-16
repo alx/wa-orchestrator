@@ -25,6 +25,7 @@
     "beads-project": {
       "kind": "beads",
       "botName": "Project Bot",
+      "conversationDir": "<HOME>/code/wa-orchestrator/conversations/beads-project",
       "beadsRepoDir": "<ABS_PATH_TO_BEADS_REPO>",
       "beadsLabel": "<BEADS_LABEL>",
       "beadsParentEpic": "<PARENT_EPIC_ID>",
@@ -35,6 +36,7 @@
     "site-project": {
       "kind": "cpo",
       "botName": "Site Bot",
+      "conversationDir": "<HOME>/code/wa-orchestrator/conversations/site-project",
       "beadsRepoDir": "<ABS_PATH_TO_LIVE_BEADS_DB>",
       "epics": ["<EPIC_ID_1>", "<EPIC_ID_2>"],
       "runCmd": "edit",

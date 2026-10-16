@@ -9,3 +9,4 @@ config.json
 .wwebjs_cache/
 brain-prompts.json
 dist/
+conversations/
