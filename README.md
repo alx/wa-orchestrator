@@ -32,6 +32,11 @@ all runtime entry points live in `dist/`.
 The brain is chosen **per group** (the `brain` field of the registry) — not
 per message, not per server.
 
+![wa-orchestrator dashboard — scoped beads + bot activity](docs/images/dashboard.png)
+
+*Dashboard (`:8093`, zero dependencies): scoped beads per `cpo` brain profile
++ latest bot activity. Screenshot uses synthetic fixture data.*
+
 ## Quickstart
 
 Prereqs: `docker`, `xvfb` (`xvfb-run`), system Chromium, node ≥ 22.
