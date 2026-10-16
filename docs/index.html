@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wa-orchestrator — multi-group WhatsApp orchestrator</title>
 <meta name="description" content="One process, one WhatsApp account, N groups, one brain per group. Sandboxed pi agent in Docker.">
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'default' });
+</script>
 <style>
 :root { --ink:#1a1a1a; --accent:#FAB617; --cream:#F5EFE4; --line:#e2ded4; }
 body { margin:0; font:16px/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--cream); }
@@ -27,6 +31,7 @@ li { margin:.25rem 0; }
 .badge { display:inline-block; background:var(--ink); color:var(--cream); border-radius:.35rem; padding:.1rem .55rem; font-size:.8rem; }
 footer { margin-top:3rem; font-size:.85rem; opacity:.7; }
 .flow { background:#232323; color:#cfcfcf; padding:1rem; border-radius:.5rem; font-size:.8rem; overflow-x:auto; white-space:pre; }
+.mermaid { background:#fff; border:1px solid var(--line); border-radius:.5rem; padding:1rem; margin:1rem 0; text-align:center; overflow-x:auto; }
 </style>
 </head>
 <body>
@@ -51,6 +56,63 @@ of the registry), not per message nor per server. Two profiles ship by default:<
 <tr><td><code>beads-project</code></td><td>project beads (list/create by label)</td><td><code>pi run &lt;bead&gt;</code> → executes the bead, artifacts on branch <code>task/&lt;id&gt;</code></td></tr>
 <tr><td><code>site-project</code></td><td>scoped read-only beads (live Dolt DB, filtered to a set of epics)</td><td><code>pi edit &lt;instruction&gt;</code> → edits the site, verifies the build, <strong>commit + push</strong></td></tr>
 </table>
+
+<h2>Diagrams</h2>
+<p>Rendered client-side with <a href="https://mermaid.js.org/">mermaid.js</a> (CDN, no build step).</p>
+
+<h3>1 · The application once running</h3>
+<div class="mermaid">
+flowchart LR
+  WA["📱 WhatsApp<br/>(owner account — 1 client)"]
+  subgraph HOST["host — one process"]
+    IDX["index.js<br/>wwebjs · Xvfb · trigger: pi …"]
+    REG["registry<br/>groups[] → brain"]
+    BRAIN["brain.js"]
+    DASH["dashboard.js :8093"]
+  end
+  subgraph BOX["sandbox container (one docker run per brain call)"]
+    PI["pi agent 1.2.0<br/>model locked"]
+    FS["mounts: beads (ro) · site checkout · git-home"]
+  end
+  CFG[("config.json")]
+  PROMPTS[("brain-prompts.json")]
+  ACT[("activity.jsonl")]
+  WA <-->|message_create · sendMessage| IDX
+  CFG -.-> REG
+  REG -->|group → brain profile| BRAIN
+  PROMPTS -.-> BRAIN
+  IDX --> BRAIN
+  BRAIN -->|docker run| PI
+  PI <--> FS
+  PI -->|final reply text| BRAIN
+  BRAIN --> IDX
+  IDX -->|🤖 prefixed reply| WA
+  IDX -.->|append asks · replies · runs| ACT
+  ACT -.->|read| DASH
+</div>
+
+<h3>2 · One group message → one AI reply</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  actor M as Group member
+  participant WA as WhatsApp
+  participant I as index.js (wwebjs)
+  participant B as brain.js
+  participant C as sandbox (pi agent)
+  M->>WA: pi {ask} (in the group)
+  WA->>I: message_create
+  I->>I: own-message filter (🤖 prefix · rolling sent-id set)
+  I->>I: trigger check (body = pi or starts with pi )
+  I->>WA: sendMessage 🤖 on it — the brain is thinking…
+  I->>B: resolve brain (registry: group → profile)
+  B->>C: docker run (prompt rendered from brain-prompts.json + mounts)
+  C->>C: work (bd list · edit site + hugo build)
+  C-->>B: final reply text
+  B-->>I: reply
+  I->>WA: sendMessage 🤖 {reply}
+  WA->>M: reply posted in the group
+</div>
 
 <h2>Quickstart</h2>
 <pre>npm install
