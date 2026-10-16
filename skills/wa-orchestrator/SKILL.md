@@ -21,7 +21,7 @@ groups, one brain (a pi agent sandboxed in Docker) per group.
 3. Services (user-scoped, files provided, fill `<HOME>`/`<NODE_BIN>`):
    `wa-orchestrator.service` + `wa-orchestrator-dashboard.service`
    (`systemctl --user enable --now …`), or foreground:
-   `SELFTEST_GROUP="Group A" xvfb-run -a node index.js`.
+   `SELFTEST_GROUP="Group A" xvfb-run -a node dist/index.js`.
 
 ## Hard rules
 - **ONE client per WhatsApp account**: never two instances (nor another bot

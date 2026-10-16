@@ -38,7 +38,7 @@ Date: 2026-10-16. Verified empirically against live WhatsApp Web via wwebjs 1.34
 - `acceptInvite` / join path → broken. Irrelevant if already in the group.
 - `window.WWebCollections` may be renamed/removed on newer WA Web builds —
   group auto-enumeration must fail **gracefully** (log + continue). JID
-  discovery that works regardless is message-based: `node discover.js`
+  discovery that works regardless is message-based: `node dist/discover.js`
   (send a throwaway message to the target group, read the JID off the inbound
   event). 100% reliable, build-independent.
 

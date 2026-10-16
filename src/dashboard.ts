@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dashboard.js — zero-dependency HTML dashboard for wa-orchestrator
+ * dashboard.ts — zero-dependency HTML dashboard for wa-orchestrator
  *
  * Serves on :8093 by default (override with DASHBOARD_PORT), bound to ALL
  * interfaces (box sits on a private tailnet; optional bearer via DASHBOARD_TOKEN):
@@ -16,51 +16,71 @@
  *
  * Auto-refresh is a plain <meta refresh> — no JS, no deps.
  */
-'use strict';
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const { spawn } = require('child_process');
+import * as http from 'http';
+import * as fs from 'fs';
+import { spawn } from 'child_process';
+import { loadConfig, Config, BrainProfile } from './config';
 
-const CFG = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+const CFG: Config = loadConfig();
 const PORT = Number(process.env.DASHBOARD_PORT || 8093);
 const HOST = process.env.DASHBOARD_HOST || '0.0.0.0'; // bind host-wide
 const TOKEN = process.env.DASHBOARD_TOKEN || ''; // optional: require ?token=<TOKEN> when set
 const REFRESH_MS = 30000; // beads snapshot refresh
 const ACTIVITY_TAIL = 25; // events shown / served
-const ACTIVITY_FILE = CFG.activityLog;
+const ACTIVITY_FILE = CFG.activityLog as string;
 const BD_BIN = process.env.BD_BIN || 'bd';
 
 // One "scope" per brain profile of kind "cpo": its beads repo + epic filter.
-const SCOPES = Object.entries(CFG.brains || {})
-  .filter(([, v]) => v && v.kind === 'cpo' && v.beadsRepoDir)
-  .map(([name, v]) => ({ name, repo: v.beadsRepoDir, epics: v.epics || [] }));
+interface Scope {
+  name: string;
+  repo: string;
+  epics: string[];
+}
 
-const inScope = (scope, id) => scope.epics.some((e) => id === e || id.startsWith(e + '.'));
+const SCOPES: Scope[] = Object.entries(CFG.brains ?? {})
+  .filter(([, v]) => v && v.kind === 'cpo' && v.beadsRepoDir)
+  .map(([name, v]) => ({ name, repo: v.beadsRepoDir as string, epics: (v.epics as string[]) ?? [] }));
+
+const inScope = (scope: Scope, id: string): boolean =>
+  scope.epics.some((e) => id === e || id.startsWith(e + '.'));
 
 // ---------------- beads snapshots (per scope) ----------------
-const caches = new Map(); // scope.name → { ts, error, items }
+interface BeadItem {
+  id: string;
+  title: string;
+  status: string;
+  priority?: number | string;
+  issue_type?: string;
+  updated_at?: string;
+  [k: string]: unknown;
+}
+interface Snapshot {
+  ts: number;
+  error: string | null;
+  items: BeadItem[];
+}
+const caches = new Map<string, Snapshot>(); // scope.name → snapshot
 for (const s of SCOPES) caches.set(s.name, { ts: 0, error: null, items: [] });
 
-function refreshScope(scope) {
+function refreshScope(scope: Scope): void {
   const child = spawn(BD_BIN, ['list', '-s', 'all', '--json', '--brief'], {
     cwd: scope.repo,
     env: { ...process.env, NO_COLOR: '1' },
   });
   let out = '';
-  child.stdout.on('data', (d) => (out += d));
-  child.on('error', (e) => onBdDone(scope, null, `spawn: ${e.message}`));
+  child.stdout.on('data', (d: Buffer) => (out += d.toString('utf8')));
+  child.on('error', (e: Error) => onBdDone(scope, null, `spawn: ${e.message}`));
   child.on('close', (code) => onBdDone(scope, code === 0 ? out : null, code === 0 ? null : `bd exited ${code}`));
 }
-function onBdDone(scope, out, err) {
-  const prev = caches.get(scope.name);
+function onBdDone(scope: Scope, out: string | null, err: string | null): void {
+  const prev = caches.get(scope.name) as Snapshot;
   if (out) {
     try {
-      const all = JSON.parse(out);
+      const all: BeadItem[] = JSON.parse(out);
       const items = all.filter((b) => inScope(scope, b.id));
       caches.set(scope.name, { ts: Date.now(), error: null, items });
     } catch (e) {
-      caches.set(scope.name, { ...prev, error: `json: ${e.message}` });
+      caches.set(scope.name, { ...prev, error: `json: ${(e as Error).message}` });
     }
   } else if (err) {
     caches.set(scope.name, { ...prev, error: err });
@@ -68,15 +88,20 @@ function onBdDone(scope, out, err) {
 }
 
 // ---------------- activity tail ----------------
-let actCache = { mtimeMs: -1, events: [] };
-function activityTail() {
-  let st;
+interface ActivityCache {
+  mtimeMs: number;
+  size: number;
+  events: any[];
+}
+let actCache: ActivityCache = { mtimeMs: -1, size: -1, events: [] };
+function activityTail(): any[] {
+  let st: fs.Stats;
   try { st = fs.statSync(ACTIVITY_FILE); } catch { return []; }
   if (st.mtimeMs === actCache.mtimeMs && st.size === actCache.size) return actCache.events;
   let text = '';
-  try { text = fs.readFileSync(ACTIVITY_FILE, 'utf8'); } catch (e) { return actCache.events; }
+  try { text = fs.readFileSync(ACTIVITY_FILE, 'utf8'); } catch { return actCache.events; }
   const lines = text.split('\n').filter(Boolean).slice(-ACTIVITY_TAIL);
-  const events = [];
+  const events: any[] = [];
   for (const l of lines) {
     try { events.push(JSON.parse(l)); } catch { /* skip partial line */ }
   }
@@ -85,11 +110,12 @@ function activityTail() {
 }
 
 // ---------------- html ----------------
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const STATUS_ICON = { open: '○', in_progress: '◐', closed: '✓', blocked: '●', deferred: '❄' };
-const STATUS_CLASS = { open: 'st-open', in_progress: 'st-prog', closed: 'st-closed', blocked: 'st-blocked', deferred: 'st-defer' };
+const ESC_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+const STATUS_ICON: Record<string, string> = { open: '○', in_progress: '◐', closed: '✓', blocked: '●', deferred: '❄' };
+const STATUS_CLASS: Record<string, string> = { open: 'st-open', in_progress: 'st-prog', closed: 'st-closed', blocked: 'st-blocked', deferred: 'st-defer' };
 
-function beadRows(items) {
+function beadRows(items: BeadItem[]): string {
   return items
     .sort((a, b) => (a.id < b.id ? 1 : -1))
     .map(
@@ -105,7 +131,7 @@ function beadRows(items) {
     .join('\n');
 }
 
-function activityRows(events) {
+function activityRows(events: any[]): string {
   return events
     .slice()
     .reverse()
@@ -119,8 +145,8 @@ function activityRows(events) {
     .join('\n') || '<tr><td colspan="3" class="empty">no activity yet</td></tr>';
 }
 
-function scopeSection(scope) {
-  const b = caches.get(scope.name);
+function scopeSection(scope: Scope): string {
+  const b = caches.get(scope.name) as Snapshot;
   const openCount = b.items.filter((x) => x.status === 'open' || x.status === 'in_progress').length;
   return `<h2>beads — ${esc(scope.name)} <span class="count">(${b.items.length} total · ${openCount} open · repo ${esc(scope.repo)}, epics ${scope.epics.map(esc).join(' + ')}${scope.epics.length ? ' + descendants' : ''})</span></h2>
 <table><thead><tr><th>id</th><th>title</th><th>status</th><th>pri</th><th>type</th><th>updated</th></tr></thead>
@@ -130,7 +156,7 @@ ${beadRows(b.items)}
 <div class="meta">snapshot ${b.ts ? new Date(b.ts).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : 'n/a'}${b.error ? ` <span class="err">· beads refresh error: ${esc(b.error)} (showing last good snapshot)</span>` : ''}</div>`;
 }
 
-function render() {
+function render(): string {
   const totalBeads = [...caches.values()].reduce((n, c) => n + c.items.length, 0);
   const scopesHtml = SCOPES.map(scopeSection).join('\n');
   const events = activityTail();
@@ -174,16 +200,16 @@ ${activityRows(events)}
 
 // ---------------- server ----------------
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
+  const url = new URL(req.url ?? '/', 'http://localhost');
   if (TOKEN && url.searchParams.get('token') !== TOKEN) {
     res.writeHead(403, { 'content-type': 'text/plain' });
     return res.end('forbidden');
   }
-  const u = req.url.split('?')[0];
+  const u = (req.url ?? '').split('?')[0];
   if (u === '/api/beads') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    const out = {};
-    for (const s of SCOPES) out[s.name] = { repo: s.repo, epics: s.epics, ...caches.get(s.name) };
+    const out: Record<string, unknown> = {};
+    for (const s of SCOPES) out[s.name] = { repo: s.repo, epics: s.epics, ...(caches.get(s.name) as Snapshot) };
     return res.end(JSON.stringify(out, null, 1));
   }
   if (u === '/api/activity') {

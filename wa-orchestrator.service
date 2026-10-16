@@ -12,7 +12,8 @@ Description=wa-orchestrator — multi-group WhatsApp orchestrator (wwebjs client
 [Service]
 Type=simple
 WorkingDirectory=<HOME>/code/wa-orchestrator
-ExecStart=/bin/bash -c 'exec xvfb-run -a <NODE_BIN> <HOME>/code/wa-orchestrator/index.js'
+# Compiled output — `npm run build` (tsc) produces dist/ from src/*.ts.
+ExecStart=/bin/bash -c 'exec xvfb-run -a <NODE_BIN> <HOME>/code/wa-orchestrator/dist/index.js'
 Restart=always
 RestartSec=15
 

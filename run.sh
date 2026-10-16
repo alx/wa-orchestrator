@@ -3,4 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 # Node must be on PATH (this machine: nvm node). Wrapper is for manual runs only.
-exec xvfb-run -a node index.js
+# TS sources live in src/ and compile to dist/ — build first (npm run build).
+exec xvfb-run -a node dist/index.js

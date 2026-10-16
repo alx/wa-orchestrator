@@ -8,3 +8,4 @@ config.json
 *.log
 .wwebjs_cache/
 brain-prompts.json
+dist/

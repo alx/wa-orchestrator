@@ -6,7 +6,7 @@ Description=wa-orchestrator dashboard (scoped beads + bot activity, :8093)
 [Service]
 Type=simple
 WorkingDirectory=<HOME>/code/wa-orchestrator
-ExecStart=<NODE_BIN> <HOME>/code/wa-orchestrator/dashboard.js
+ExecStart=<NODE_BIN> <HOME>/code/wa-orchestrator/dist/dashboard.js
 Restart=always
 RestartSec=5
 

@@ -1,17 +1,20 @@
 {
   "name": "wa-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-group WhatsApp orchestrator: one process, one WhatsApp account, N groups, one pi-agent brain per group (docker-sandboxed).",
-  "main": "index.js",
+  "main": "dist/index.js",
   "bin": {
-    "wa-orchestrator": "index.js"
+    "wa-orchestrator": "dist/index.js"
   },
   "scripts": {
-    "start": "xvfb-run -a node index.js",
-    "dashboard": "node dashboard.js",
-    "discover": "xvfb-run -a node discover.js",
+    "build": "tsc",
+    "prepare": "npm run build",
+    "start": "xvfb-run -a node dist/index.js",
+    "dashboard": "node dist/dashboard.js",
+    "discover": "xvfb-run -a node dist/discover.js",
     "build-sandbox": "bash sandbox/build.sh",
-    "test-brain": "node test-brain.js"
+    "test": "node --test test/",
+    "test-brain": "node dist/test-brain.js"
   },
   "keywords": [
     "pi-package",
@@ -28,14 +31,10 @@
     ]
   },
   "files": [
-    "index.js",
-    "brain.js",
-    "groups.js",
-    "dashboard.js",
-    "discover.js",
-    "list-groups.js",
-    "test-brain.js",
+    "dist",
+    "src",
     "config.template.json",
+    "brain-prompts.template.json",
     "sandbox/Dockerfile",
     "sandbox/build.sh",
     "skills",
@@ -43,7 +42,7 @@
     "wa-orchestrator-dashboard.service",
     "docs",
     "README.md",
-    "brain-prompts.template.json"
+    "test"
   ],
   "author": "Alexandre Girard Davila <git@alexgirard.com>",
   "license": "MIT",
@@ -55,5 +54,9 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.34.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }
