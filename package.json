@@ -13,7 +13,7 @@
     "dashboard": "node dist/dashboard.js",
     "discover": "xvfb-run -a node dist/discover.js",
     "build-sandbox": "bash sandbox/build.sh",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "test-brain": "node dist/test-brain.js"
   },
   "keywords": [

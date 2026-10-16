@@ -159,7 +159,7 @@ function render(tpl: unknown, vars: Record<string, unknown>): string {
   return String(tpl).replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : ''));
 }
 
-function buildBeadsPrompt(ask: string, brain: BrainProfile): string {
+export function buildBeadsPrompt(ask: string, brain: BrainProfile): string {
   const P = getPrompts();
   return render(P['beads.ask'], {
     botName: brain.botName || 'Bot',
@@ -175,7 +175,7 @@ export function cpoListRecipe(epics: string[]): string {
   return `bd list -s all --json --brief 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(d);const E=${epicsJson};const x=a.filter(b=>E.some(e=>b.id===e||b.id.startsWith(e+".")));for(const b of x)console.log(b.id+" ["+b.status+"] P"+b.priority+" "+b.title)}catch(e){console.log("filter error:",e.message)}})'`;
 }
 
-function buildCpoPrompt(ask: string, brain: BrainProfile): string {
+export function buildCpoPrompt(ask: string, brain: BrainProfile): string {
   const P = getPrompts();
   const epics: string[] = brain.epics ?? [];
   return render(P['cpo.ask'], {

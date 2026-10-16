@@ -32,6 +32,7 @@ import * as path from 'path';
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
 import qrcode = require('qrcode-terminal');
 import { loadConfig, Config, GroupEntry } from './config';
+import { parseAsk, parseRun } from './trigger';
 import { listAccountGroups } from './groups';
 import { runAsk, runRunMode } from './brain';
 
@@ -72,15 +73,6 @@ function rememberSent(id?: string): void {
     const first = sentIds.values().next().value;
     if (first !== undefined) sentIds.delete(first);
   }
-}
-
-// ---------------- trigger parsing ----------------
-function parseAsk(body: string): string | null {
-  const t = (body || '').trim();
-  if (!t) return null;
-  const m = t.match(/^pi(?:\s+([\s\S]+))?$/i);
-  if (!m) return null;
-  return m[1] ? m[1].trim() : '';
 }
 
 // ---------------- serial queue (one brain run at a time, bot-wide) ----------------
@@ -125,9 +117,9 @@ async function onMessage(m: Message): Promise<void> {
   const ask = parseAsk(body);
   if (ask === null) return;
   // run mode: "<runCmd> <rest>" — e.g. "run org-xxxx" / "edit change X"
-  const runM = ask.match(new RegExp(`^${brain.runCmd}\\s+(\\S[\\s\\S]*)$`, 'i'));
-  const isRun = !!runM;
-  const effectiveAsk: string = isRun ? (runM[1] as string).trim() : (ask === '' ? (brain.defaultAsk ?? '') : ask);
+  const runArg = parseRun(ask, brain.runCmd as string);
+  const isRun = runArg !== null;
+  const effectiveAsk: string = isRun ? (runArg as string) : (ask === '' ? (brain.defaultAsk ?? '') : ask);
 
   log(isRun ? 'RUN' : 'ASK', `[${group.name}]`, 'from', m.from, ':', effectiveAsk.slice(0, 200));
   activity(isRun ? 'run_start' : 'ask', {
