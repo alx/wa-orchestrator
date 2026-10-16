@@ -27,9 +27,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           SHA=$(git rev-parse HEAD)
+          # stash payload before wiping the tree
+          mkdir -p /tmp/docs_payload && cp -r docs/. /tmp/docs_payload/
           git checkout --orphan _gh_tmp
           git rm -rf .
-          cp -r docs/. ./
+          cp -r /tmp/docs_payload/. ./
           git add .
           git commit -m "docs: publish from $SHA"
           # checkout@v4 rewrites origin to use GITHUB_TOKEN
