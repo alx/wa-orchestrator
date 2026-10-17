@@ -81,7 +81,7 @@ flowchart LR
     FS["mounts: /workspace = group's own dir · /beads = beads DB (BEADS_DIR)<br/>site checkout · git-home · herdr.sock (host socket)"]
   end
   HSRV["host herdr server<br/>(herdr.service · user unit)"]
-  SESS[("conversations/<brain>/<group-slug>/<created>_<slug>.jsonl")]
+  SESS[("conversations/&lt;brain&gt;/&lt;group-slug&gt;/&lt;created&gt;_&lt;slug&gt;_.jsonl")]
   CFG[("config.json")]
   PROMPTS[("brain-prompts.json")]
   ACT[("activity.jsonl")]
@@ -90,7 +90,7 @@ flowchart LR
   REG -->|group → brain profile| BRAIN
   PROMPTS -.-> BRAIN
   IDX --> BRAIN
-  BRAIN -->|"docker run --session-id <slug> --session-dir /sessions"| PI
+  BRAIN -->|"docker run --session-id &lt;slug&gt; --session-dir /sessions"| PI
   SESS -.->|"/sessions volume (one dir per group)"| PI
   PI <--> FS
   PI <-->|"ask_questions → extension_ui_request (RPC)"| BRAIN
