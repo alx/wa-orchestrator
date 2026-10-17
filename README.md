@@ -17,8 +17,11 @@ all runtime entry points live in `dist/`.
 ```
  WhatsApp ──wwebjs──▶ index.js ──per group──▶ brain.js ──docker──▶ container
  (1 account)          registry                docker run            pi agent
-                                              wa-orchestrator-     ├── beads (read-only)
-                                              sandbox              ├── tools (git, hugo, …)
+                                              wa-orchestrator-     ├── /workspace = the group's own work dir
+                                              sandbox              ├── /beads     = beads repo (`bd` via BEADS_DIR)
+                                                                    ├── tools (git, hugo, …)
+                                                                    ├── subagent (in-process child agents)
+                                                                    ├── herdr (host server over a mounted socket)
                                                                     └── 1 brain ≠ 1 group
 ```
 
@@ -32,6 +35,12 @@ all runtime entry points live in `dist/`.
 The brain is chosen **per group** (the `brain` field of the registry) — not
 per message, not per server.
 
+**Every group gets its own work area**: each brain profile sets a
+`workspaceDir` (e.g. `workspaces/<brain>/`), mounted at `/workspace`. Brains
+never operate inside a shared project repo; the beads DB is a *separate*
+`/beads` mount and `BEADS_DIR` makes the bare `bd` CLI resolve it from any
+cwd.
+
 ![wa-orchestrator dashboard — scoped beads + bot activity](docs/images/dashboard.png)
 
 *Dashboard (`:8093`, zero dependencies): scoped beads per `cpo` brain profile
@@ -43,7 +52,8 @@ Prereqs: `docker`, `xvfb` (`xvfb-run`), system Chromium, node ≥ 22.
 
 ```bash
 npm install            # also runs `npm run build` (tsc → dist/)
-# 1. Sandbox image (pi 1.2.0, bd, jq, hugo_extended — see sandbox/Dockerfile)
+# 1. Sandbox image (pi 1.2.0, bd, jq, hugo_extended + the pinned pi packages:
+#    provider, ask-questions, pi-subagents, pi-herdr + herdr client — Dockerfile)
 bash sandbox/build.sh
 # 2. Config: start from the template, fill in JIDs + absolute paths
 cp config.template.json config.json
@@ -90,9 +100,74 @@ pi session under the brain profile's `conversationDir`:
   *file*, and the model lock is re-verified on every start, resumed sessions
   included.
 
+### Multi-agent primitives (delegation)
+
+The sandbox bakes in two pinned delegation layers on top of pi:
+
+- **`subagent` tool** ([`pi-subagents`](https://www.npmjs.com/package/pi-subagents), in-process):
+  the brain can launch child agents — `scout` to find, `reviewer` to check,
+  `worker` to build, `oracle` to consult, `delegate` for simple sub-tasks —
+  that run in the *same* sandbox under the *same* constraints and model lock.
+  Children are **blocking by default** (the one-shot RPC brain is killed on
+  settle, so a detached child would die mid-work); parallel children are
+  allowed. Config is materialized per run
+  (`extensions/subagent/config.json`: `{"asyncByDefault": false,
+  "toolActivation": "eager"}` — eager, because the default "auto" mode hides
+  the tool in resumed sessions).
+- **herdr tools** ([`pi-herdr`](https://www.npmjs.com/package/@andrewjacop/pi-herdr),
+  host panes): `herdr_spawn_agent` starts a **visible agent pane on the
+  operator's machine** — the in-container herdr client talks to the *host*
+  herdr server over a single bind-mounted socket (`herdrSocketPath`), and
+  `herdr_wait_output` / `herdr_get_agent_result` collect, `herdr_message_agent`
+  steers, `herdr_interrupt_agent` stops. Panes are **host-owned**: they
+  survive the disposable `docker --rm` brain runs, and a human can watch and
+  type in them from the herdr TUI. `herdrSpawnPane` pins a dedicated home
+  pane (a workspace of its own) as the spawn target so bot agents stay out of
+  the operator's live work.
+
+Host side (required for herdr children to actually start):
+
+```bash
+# 1. herdr server kept alive by the herdr.service user unit (template in this
+#    repo; starts only if none running, Restart=on-failure, lingering).
+# 2. pi-herdr installed ONCE on the host, self-contained (org-5mdy.1): the
+#    launch plan injects <pkg>/src/child.ts into the child pi, which runs in a
+#    HOST pane — the package must live at a host-equal path.
+mkdir -p ~/.local/share/wa-orchestrator/pi-herdr && cd $_
+npm init -y && npm i @andrewjacop/pi-herdr@0.6.0
+# then set "herdrPkgDir" in config.json; brain.ts mounts it onto itself and
+# loads it in-sandbox from the same absolute path.
+```
+
+Without `herdrSocketPath`/`herdrPkgDir` the herdr tools simply fail
+in-sandbox and the brain falls back to in-process subagents.
+
+### Clarifying questions (structured Q&A in the group)
+
+When a requirement is blurry, the brain can ask the **group** a structured
+question instead of guessing. The sandbox ships the
+[`@adeildo/pi-ask-questions`](https://www.npmjs.com/package/@adeildo/pi-ask-questions)
+extension (pinned, loaded via the local-path `packages` list), which gives pi
+an `ask_questions` tool:
+
+1. The brain calls `ask_questions` → pi emits an `extension_ui_request`
+   (RPC) → the bot posts the question in the group, options numbered
+   (plus a "Type something." row for free text).
+2. The **next member message in that group** is the answer: a number picks
+   that exact option; free text takes the typed row. The run's timeout is
+   paused while the group is being asked.
+3. No answer within `questionTimeoutMs` (default 30 min) → the question is
+   cancelled and the brain continues (or reports the lack of decision).
+
+Activity log gains `question_asked` / `question_answered` /
+`question_timeout` entries.
+
 ### Adding a brain
 Add a profile to `brains{}` in `config.json` (repo paths, prompts file
-entries, run mode) and point a registry entry at it.
+entries, run mode) and point a registry entry at it. Give it its own
+`workspaceDir` (one per group — never a shared project repo) and a
+`beadsRepoDir` (mounted at `/beads`); `herdrSocketPath`/`herdrSpawnPane`
+activate the host-herdr tools when set.
 
 ## Security
 

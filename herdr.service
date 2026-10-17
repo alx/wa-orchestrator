@@ -1,0 +1,21 @@
+[Unit]
+Description=Herdr headless server — start only if none running (user-scoped, linger)
+# USER-scoped unit (installed to ~/.config/systemd/user/). Runs with the user
+# via Linger=yes; no login session required.
+#
+# Behavior: a guard checks `herdr status server` first.
+#   - server already running  -> prints a note, exits 0 (unit: inactive/exited)
+#   - no server running       -> execs `herdr server` (systemd then tracks the
+#                                real process, so crashes are Restart=on-failure)
+#
+# TEMPLATE — substitute before install:
+#   <HERDR_BIN>  → absolute path to the herdr binary, e.g. <HOME>/.local/bin/herdr
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'if <HERDR_BIN> status server 2>/dev/null | grep -q "^status: running"; then echo "herdr server already running; not starting a duplicate"; else exec <HERDR_BIN> server; fi'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

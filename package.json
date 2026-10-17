@@ -1,6 +1,6 @@
 {
   "name": "wa-orchestrator",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Multi-group WhatsApp orchestrator: one process, one WhatsApp account, N groups, one pi-agent brain per group (docker-sandboxed).",
   "main": "dist/index.js",
   "bin": {

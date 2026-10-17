@@ -152,3 +152,144 @@ test('every published template key renders placeholder-free with full vars', () 
     assert.ok(!out.includes('{{'), `${key} left an unrendered placeholder`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Extension-UI dialogs over the real runSandbox (org-lsv8.4): a fake `docker`
+// on PATH execs a fixture pi that speaks the RPC protocol — get_state,
+// prompt, extension_ui_request (select, then input), agent_settled — and
+// logs every stdin record so we can assert the exact extension_ui_response
+// records the brain wrote back.
+// ---------------------------------------------------------------------------
+
+function withFakePi(logFile, fn) {
+  const prev = { PATH: process.env.PATH, FAKE_PI: process.env.FAKE_PI, FAKE_PI_LOG: process.env.FAKE_PI_LOG };
+  const bin = path.join(tmp, 'fakebin');
+  fs.mkdirSync(bin, { recursive: true });
+  const dockerShim = path.join(bin, 'docker');
+  fs.writeFileSync(dockerShim, '#!/bin/sh\nexec node "$FAKE_PI" "$@"\n');
+  fs.chmodSync(dockerShim, 0o755);
+  process.env.PATH = bin + path.delimiter + process.env.PATH;
+  process.env.FAKE_PI = path.join(__dirname, 'fixtures', 'fake-pi-dialog.js');
+  process.env.FAKE_PI_LOG = logFile;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      process.env.PATH = prev.PATH;
+      if (prev.FAKE_PI === undefined) delete process.env.FAKE_PI; else process.env.FAKE_PI = prev.FAKE_PI;
+      if (prev.FAKE_PI_LOG === undefined) delete process.env.FAKE_PI_LOG; else process.env.FAKE_PI_LOG = prev.FAKE_PI_LOG;
+    });
+}
+
+function stdinRecords(file) {
+  return fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+}
+
+test('runSandbox: select→input dialog round-trips with exact response records', async () => {
+  const logFile = path.join(tmp, 'dialog-answered.log');
+  const hostDir = path.join(tmp, 'dlg-sess-1');
+  fs.mkdirSync(hostDir, { recursive: true });
+  await withFakePi(logFile, async () => {
+    const res = await brain.runSandbox({
+      prompt: 'please demo',
+      workspace: tmp,
+      timeoutMs: 30000,
+      session: { id: 'dlg-1', hostDir },
+      onUiRequest: (req) => {
+        if (req.method === 'select') return { value: req.options[0] }; // member picks option 1
+        if (req.method === 'input') return { value: 'the typed text' };
+        return { cancelled: true };
+      },
+    });
+    assert.match(res.text, /done \(answered\)/);
+    const recs = stdinRecords(logFile);
+    const ui1 = recs.find((r) => r.type === 'extension_ui_response' && r.id === 'ui-1');
+    const ui2 = recs.find((r) => r.type === 'extension_ui_response' && r.id === 'ui-2');
+    assert.strictEqual(ui1.value, '1. Tree: nested by account', 'select echoes the exact option line');
+    assert.strictEqual(ui2.value, 'the typed text', 'input carries the raw reply text');
+  });
+});
+
+test('runSandbox: cancelled select still resolves the run', async () => {
+  const logFile = path.join(tmp, 'dialog-cancelled.log');
+  const hostDir = path.join(tmp, 'dlg-sess-2');
+  fs.mkdirSync(hostDir, { recursive: true });
+  await withFakePi(logFile, async () => {
+    const res = await brain.runSandbox({
+      prompt: 'please demo',
+      workspace: tmp,
+      timeoutMs: 30000,
+      session: { id: 'dlg-2', hostDir },
+      onUiRequest: () => ({ cancelled: true }),
+    });
+    assert.match(res.text, /done \(cancelled after select\)/);
+    const recs = stdinRecords(logFile);
+    const ui1 = recs.find((r) => r.type === 'extension_ui_response' && r.id === 'ui-1');
+    assert.strictEqual(ui1.cancelled, true);
+  });
+});
+
+test('runSandbox: no onUiRequest handler → dialog cancelled, run resolves', async () => {
+  const logFile = path.join(tmp, 'dialog-nocb.log');
+  const hostDir = path.join(tmp, 'dlg-sess-3');
+  fs.mkdirSync(hostDir, { recursive: true });
+  await withFakePi(logFile, async () => {
+    const res = await brain.runSandbox({
+      prompt: 'please demo',
+      workspace: tmp,
+      timeoutMs: 30000,
+      session: { id: 'dlg-3', hostDir },
+    });
+    assert.match(res.text, /done \(cancelled after select\)/);
+    const recs = stdinRecords(logFile);
+    assert.strictEqual(recs.find((r) => r.type === 'extension_ui_response' && r.id === 'ui-1').cancelled, true);
+  });
+});
+
+// --- Multi-agent primitives (org-5mdy) ---
+
+test('piPackages: provider + three brain extensions, in load order', () => {
+  assert.deepEqual(brain.piPackages(), [
+    '/opt/pi-provider-gd',
+    '/opt/pi-ask-questions',
+    '/opt/pi-subagents',
+    '/opt/pi-herdr',
+  ]);
+});
+
+test('herdrSocketArgs: live socket → mount + env; absent/unset → none', () => {
+  const live = path.join(tmp, 'herdr-live.sock');
+  fs.writeFileSync(live, '');
+  assert.deepEqual(brain.herdrSocketArgs(live), [
+    '-v', `${live}:/herdr/herdr.sock`,
+    '-e', 'HERDR_SOCKET_PATH=/herdr/herdr.sock',
+  ]);
+  assert.deepEqual(brain.herdrSocketArgs(path.join(tmp, 'nope.sock')), []);
+  assert.deepEqual(brain.herdrSocketArgs(undefined), []); // unset in synthetic config
+});
+
+test('herdrSocketArgs: spawn pane → HERDR_PANE_ID env for --current resolution', () => {
+  const live = path.join(tmp, 'herdr-live.sock');
+  fs.writeFileSync(live, '');
+  assert.deepEqual(brain.herdrSocketArgs(live, 'w2:p1'), [
+    '-v', `${live}:/herdr/herdr.sock`,
+    '-e', 'HERDR_SOCKET_PATH=/herdr/herdr.sock',
+    '-e', 'HERDR_PANE_ID=w2:p1',
+  ]);
+});
+
+test('agentDirArgs: host-equal pi agent dir mount (org-5mdy.1)', () => {
+  const d = '/home/alx/code/wa-orchestrator/sandbox/pi-config';
+  // same host dir mounted onto ITSELF + PI_CODING_AGENT_DIR, so the session
+  // path pi-herdr seeds under <agentDir>/sessions resolves on the host too
+  assert.deepEqual(brain.agentDirArgs(d), [
+    '-v', `${d}:${d}`,
+    '-e', `PI_CODING_AGENT_DIR=${d}`,
+  ]);
+});
+
+test('herdrPkgArgs: host pi-herdr install mounted host-equal (org-5mdy.1)', () => {
+  // the child extension path <pkg>/src/child.ts must resolve on the HOST
+  const d = '/home/alx/.local/share/wa-orchestrator/pi-herdr';
+  assert.deepEqual(brain.herdrPkgArgs(d), ['-v', `${d}:${d}`]);
+  assert.deepEqual(brain.herdrPkgArgs(undefined), []); // unset in synthetic config
+});

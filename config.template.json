@@ -1,8 +1,16 @@
 {
   "_comment": "wa-orchestrator configuration TEMPLATE. Copy to config.json and fill in every <PLACEHOLDER>. Paths must be ABSOLUTE (no ~ expansion at runtime). Keep config.json out of git (it is gitignored).",
   "groups": [
-    { "jid": "<GROUP_JID_1>", "name": "Group A", "brain": "beads-project" },
-    { "jid": "<GROUP_JID_2>", "name": "Group B", "brain": "site-project" }
+    {
+      "jid": "<GROUP_JID_1>",
+      "name": "Group A",
+      "brain": "beads-project"
+    },
+    {
+      "jid": "<GROUP_JID_2>",
+      "name": "Group B",
+      "brain": "site-project"
+    }
   ],
   "triggerPrefix": "pi ",
   "botPrefix": "🤖 ",
@@ -31,19 +39,24 @@
       "beadsParentEpic": "<PARENT_EPIC_ID>",
       "runCmd": "run",
       "artifactRepoDir": "<ABS_PATH_TO_PROJECT_GIT_REPO>",
-      "defaultAsk": "List the current open beads."
+      "defaultAsk": "List the current open beads.",
+      "workspaceDir": "<HOME>/code/wa-orchestrator/workspaces/beads-project"
     },
     "site-project": {
       "kind": "cpo",
       "botName": "Site Bot",
       "conversationDir": "<HOME>/code/wa-orchestrator/conversations/site-project",
       "beadsRepoDir": "<ABS_PATH_TO_LIVE_BEADS_DB>",
-      "epics": ["<EPIC_ID_1>", "<EPIC_ID_2>"],
+      "epics": [
+        "<EPIC_ID_1>",
+        "<EPIC_ID_2>"
+      ],
       "runCmd": "edit",
       "defaultAsk": "List the open project beads.",
       "siteDir": "<ABS_PATH_TO_SITE_CHECKOUT>",
       "siteBuildCmd": "<SITE_BUILD_COMMAND>",
-      "siteLiveUrl": "https://<SITE_URL>"
+      "siteLiveUrl": "https://<SITE_URL>",
+      "workspaceDir": "<HOME>/code/wa-orchestrator/workspaces/site-project"
     }
   },
   "gitHomeDir": "<HOME>/code/wa-orchestrator/sandbox/git-home",
@@ -51,5 +64,9 @@
   "gitIdentity": {
     "name": "<COMMITTER_NAME>",
     "email": "<COMMITTER_EMAIL>"
-  }
+  },
+  "questionTimeoutMs": 1800000,
+  "herdrSocketPath": "<HOME>/.config/herdr/herdr.sock",
+  "herdrSpawnPane": "<HERDR_HOME_PANE_ID, e.g. w2:p1>",
+  "herdrPkgDir": "<HOME>/.local/share/wa-orchestrator/pi-herdr"
 }

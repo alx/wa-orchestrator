@@ -26,6 +26,31 @@ COPY pi-provider-gd/ /opt/pi-provider-gd/
 # 1.3.0 changed provider/config loading — do NOT float this.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
 
+# Clarifying-questions extension (org-lsv8, MIT): lets the brain ask the
+# GROUP structured questions (options + typed) when a requirement is blurry.
+# Pinned; loaded via a local-path entry in the host-generated settings.json
+# packages list (/opt/pi-ask-questions). Installed after pi so its peer dep
+# resolves to the same global pi-coding-agent 1.2.0.
+RUN npm install -g --ignore-scripts @adeildo/pi-ask-questions@5.11.0 \
+  && ln -sfn "$(npm root -g)/@adeildo/pi-ask-questions" /opt/pi-ask-questions
+
+# Multi-agent primitives (org-5mdy), pinned. Installed after pi so their peer
+# deps resolve to the same global pi-coding-agent 1.2.0.
+#  - pi-subagents: in-process child agents (scout/reviewer/worker/oracle/delegate)
+#  - pi-herdr: spawn/steer/wait/harvest agent panes in a herdr server
+RUN npm install -g --ignore-scripts pi-subagents@0.78.0 \
+  && ln -sfn "$(npm root -g)/pi-subagents" /opt/pi-subagents \
+&& npm install -g --ignore-scripts @andrewjacop/pi-herdr@0.6.0 \
+  && ln -sfn "$(npm root -g)/@andrewjacop/pi-herdr" /opt/pi-herdr
+
+# herdr client binary (v0.9.5, sha256 pinned from herdr.dev/latest.json) —
+# talks to the HOST herdr server over a bind-mounted socket (HERDR_SOCKET_PATH
+# is set in the docker run args when config.herdrSocketPath is live). The
+# server runs on the host; its panes survive this container (docker --rm) and
+# stay visible in the human's herdr TUI.
+COPY install-herdr.js /tmp/install-herdr.js
+RUN node /tmp/install-herdr.js && rm /tmp/install-herdr.js
+
 # Hugo — must track website-draft/.github/workflows/deploy.yml (HUGO_VERSION).
 ARG HUGO_VERSION=0.159.0
 RUN wget -qO /tmp/hugo.tar.gz "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \

@@ -46,9 +46,12 @@ sandboxed Docker container, with a locked LLM model.</p>
 <h2>Architecture</h2>
 <div class="flow">WhatsApp ──wwebjs──▶ index.js ──per group──▶ brain.js ──docker──▶ container
  (1 account)          registry                 docker run           pi agent
-                                                            ├─ beads (read-only)
-                                                            ├─ tools (git, hugo…)
-                                                            └─ 1 brain ≠ 1 group</div>
+                                                             ├─ /workspace = the group's own work dir
+                                                             ├─ /beads     = beads repo (bd via BEADS_DIR)
+                                                             ├─ tools (git, hugo…)
+                                                             ├─ subagent (in-process child agents)
+                                                             ├─ herdr (host server over mounted socket)
+                                                             └─ 1 brain ≠ 1 group</div>
 <p>The brain is chosen <strong>per group</strong> (the <code>brain</code> field
 of the registry), not per message nor per server. Two profiles ship by default:</p>
 <table>
@@ -72,8 +75,12 @@ flowchart LR
   end
   subgraph BOX["sandbox container (one docker run per brain call)"]
     PI["pi agent 1.2.0<br/>model locked"]
-    FS["mounts: beads (ro) · site checkout · git-home"]
+    ASK["ask_questions ext<br/>(pi-ask-questions · pinned)"]
+    SUB["subagent tool<br/>(pi-subagents · in-process children)"]
+    HDRT["herdr tools<br/>(pi-herdr · host panes)"]
+    FS["mounts: /workspace = group's own dir · /beads = beads DB (BEADS_DIR)<br/>site checkout · git-home · herdr.sock (host socket)"]
   end
+  HSRV["host herdr server<br/>(herdr.service · user unit)"]
   SESS[("conversations/<brain>/<group-slug>/<created>_<slug>.jsonl")]
   CFG[("config.json")]
   PROMPTS[("brain-prompts.json")]
@@ -86,6 +93,11 @@ flowchart LR
   BRAIN -->|"docker run --session-id <slug> --session-dir /sessions"| PI
   SESS -.->|"/sessions volume (one dir per group)"| PI
   PI <--> FS
+  PI <-->|ask_questions → extension_ui_request (RPC)| BRAIN
+  PI <--> SUB
+  HDRT -.->|"bind-mounted socket — HERDR_SOCKET_PATH"| HSRV
+  HSRV -->|"host-owned panes survive docker --rm"| HSRV
+  WA <-->|"clarifying question ⇄ numbered answer"| IDX
   PI -->|final reply text| BRAIN
   BRAIN --> IDX
   IDX -->|🤖 prefixed reply| WA
@@ -108,12 +120,32 @@ sequenceDiagram
   I->>I: trigger check (body = pi or starts with pi )
   I->>WA: sendMessage 🤖 on it — the brain is thinking…
   I->>B: resolve brain (registry: group → profile)
-  B->>C: docker run --session-id group-slug --session-dir /sessions (first-turn prompt + mounts)
+  B->>C: docker run --session-id group-slug --session-dir /sessions (first-turn prompt + /workspace + /beads mounts)
   C->>C: work (bd list · edit site + hugo build)
+  opt brain delegates (subagent tool — in-process)
+    C->>C: child agent (scout/reviewer/worker/oracle/delegate) runs in the SAME sandbox, same constraints
+    C->>C: child result feeds back into the brain's reply
+  end
+  opt brain spawns a visible host agent (herdr tools)
+    C-->>B: herdr_spawn_agent → pane appears on the operator's machine (host herdr server)
+    Note over C,B: pane is HOST-OWNED: survives this docker --rm run — the human can watch and type in it
+    C->>C: herdr_wait_output / herdr_get_agent_result (harvest)
+  end
+  opt brain needs a decision (ask_questions tool)
+    C-->>B: extension_ui_request select (id + numbered options)
+    B-->>I: onUiRequest (run timeout paused meanwhile)
+    I->>WA: sendMessage 🤖 question + numbered options (1 · 2 · … · Type something.)
+    WA->>M: question posted in the group
+    M->>WA: reply "2" — or free text (consumed as THE answer, not a trigger)
+    WA->>I: message_create
+    I-->>B: mapped answer (exact option line / typed text)
+    B->>C: extension_ui_response (stdin, same id)
+  end
   C-->>B: final reply text
   B-->>I: reply
   I->>WA: sendMessage 🤖 {reply}
   WA->>M: reply posted in the group
+  Note over M,I: no answer within questionTimeoutMs (default 30 min) → dialog cancelled, brain continues
   Note over M,C: — later, same group (continuous conversation) —
   M->>WA: pi {follow-up}
   WA->>I: message_create
@@ -129,7 +161,8 @@ sequenceDiagram
 
 <h2>Quickstart</h2>
 <pre>npm install
-bash sandbox/build.sh          # docker image (pi, bd, jq, hugo_extended)
+bash sandbox/build.sh          # docker image (pi, bd, jq, hugo_extended + pinned pi packages:
+                               # provider, ask-questions, pi-subagents, pi-herdr + herdr client)
 cp config.template.json config.json   # fill JIDs + absolute paths
 cp brain-prompts.template.json brain-prompts.json   # adapt prompts
 # user-scoped systemd units provided (fill &lt;HOME&gt;/&lt;NODE_BIN&gt;):
@@ -148,13 +181,36 @@ minimal generic built-in prompts.</p>
 <li><strong>Containers stay disposable</strong> (<code>docker run --rm</code>): continuity comes from the session <em>file</em>, and the model lock is re-verified on every start — resumed sessions included.</li>
 </ul>
 
+<h2>Clarifying questions (structured Q&A in the group)</h2>
+<p>When a requirement is blurry, the brain asks the <strong>group</strong> instead of guessing: the sandbox ships the <a href="https://www.npmjs.com/package/@adeildo/pi-ask-questions"><code>pi-ask-questions</code></a> extension (pinned, loaded via the local-path <code>packages</code> list in the host-generated <code>settings.json</code>), which registers an <code>ask_questions</code> tool. Over RPC it becomes a normal <code>extension_ui_request</code>/<code>extension_ui_response</code> dialog that <code>brain.js</code> bridges to the group:</p>
+<ol>
+<li>The brain calls <code>ask_questions</code> → pi emits a <code>select</code> (or <code>input</code>) request → the bot posts the question in the group with <strong>numbered options</strong> plus a “Type something.” row for free text.</li>
+<li>The <strong>next member message in that group</strong> is the answer — a number picks that exact option; free text takes the typed row (the follow-up <code>input</code> dialog is answered automatically, the group never sees it).</li>
+<li>The run timeout is <strong>paused</strong> while the group is being asked; no answer within <code>questionTimeoutMs</code> (default 30 min) → the dialog is cancelled and the brain continues.</li>
+</ol>
+<p>Activity log: <code>question_asked</code> / <code>question_answered</code> / <code>question_timeout</code> entries.</p>
+
+<h2>Multi-agent primitives (delegation)</h2>
+<p>The sandbox bakes in two pinned delegation layers, so a brain is never stuck doing everything itself:</p>
+<ul>
+<li><strong><code>subagent</code> tool</strong> (<a href="https://www.npmjs.com/package/pi-subagents"><code>pi-subagents</code></a>, in-process): the brain launches child agents — <code>scout</code> to find, <code>reviewer</code> to check, <code>worker</code> to build, <code>oracle</code> to consult, <code>delegate</code> for simple sub-tasks — in the <em>same</em> sandbox under the <em>same</em> constraints and model lock. Children are blocking by default (the one-shot RPC brain is SIGKILLed on settle, so a detached child would die mid-work); parallel children are allowed. Config is materialized per run: <code>{"asyncByDefault": false, "toolActivation": "eager"}</code> — eager, because the default "auto" mode hides the tool in any session with history.</li>
+<li><strong>herdr tools</strong> (<a href="https://www.npmjs.com/package/@andrewjacop/pi-herdr"><code>pi-herdr</code></a>, host panes): <code>herdr_spawn_agent</code> starts a <strong>visible agent pane on the operator's machine</strong>. The in-container herdr client talks to the <em>host</em> herdr server over a single bind-mounted socket (<code>herdrSocketPath</code> → <code>HERDR_SOCKET_PATH</code>); <code>herdr_wait_output</code>/<code>herdr_get_agent_result</code> harvest, <code>herdr_message_agent</code> steers, <code>herdr_interrupt_agent</code> stops. Panes are <strong>host-owned</strong>: they survive the disposable <code>docker --rm</code> brain runs, and a human watches or types in them from the herdr TUI. <code>herdrSpawnPane</code> pins a dedicated home pane (its own workspace) as the spawn target, so bot agents stay out of the operator's live work.</li>
+</ul>
+<p>Host side (required for herdr children to actually start): the <code>herdr.service</code> user unit (template in the repo) keeps the herdr server running (starts <strong>only if none is running</strong>, <code>Restart=on-failure</code>, lingering); and pi-herdr is installed <strong>once on the host</strong>, self-contained:</p>
+<pre>mkdir -p ~/.local/share/wa-orchestrator/pi-herdr &amp;&amp; cd $_
+npm init -y &amp;&amp; npm i @andrewjacop/pi-herdr@0.6.0</pre>
+<p>then set <code>"herdrPkgDir"</code> in <code>config.json</code>: brain.ts bind-mounts the dir onto itself and loads the package in-sandbox from the same absolute path (the child extension <code>&lt;pkg&gt;/src/child.ts</code> is injected into the child pi running in a <em>host</em> pane, so it must resolve there). Without <code>herdrSocketPath</code>/<code>herdrPkgDir</code> the herdr tools simply fail in-sandbox and the brain falls back to in-process subagents.</p>
+
 <h2>Extending</h2>
 <ul>
 <li><strong>Add a group</strong> = one entry <code>{"jid", "name", "brain"}</code>
 in <code>groups[]</code> + a restart. JID: first message from the group, or
 <code>xvfb-run -a node dist/discover.js</code> during a maintenance window.</li>
 <li><strong>Add a brain</strong> = one profile in <code>brains{}</code>
-(beads repo, prompt entries, run modes) pointed at by the registry.</li>
+(beads repo, prompt entries, run modes) pointed at by the registry. Give it its
+own <code>workspaceDir</code> (one work area per group — never a shared project
+repo; the beads DB mounts separately at <code>/beads</code>, resolved from any
+cwd via <code>BEADS_DIR</code>).</li>
 </ul>
 
 <h2>Security</h2>

@@ -19,3 +19,5 @@ docker run --rm --entrypoint bd "$IMAGE" --version
 docker run --rm --entrypoint node "$IMAGE" --version
 docker run --rm --entrypoint jq "$IMAGE" --version
 docker run --rm --entrypoint hugo "$IMAGE" version
+docker run --rm --entrypoint herdr "$IMAGE" --version
+docker run --rm --entrypoint sh "$IMAGE" -c 'ls /opt/pi-subagents/index.js /opt/pi-herdr/src/index.ts'

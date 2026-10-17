@@ -24,6 +24,13 @@ export interface BrainProfile {
   botName?: string;
   // beads profile
   beadsRepoDir?: string;
+  /**
+   * Group's own working dir, mounted at /workspace (org-lsv8.17): one per
+   * group, OUTSIDE shared project repos (never e.g. /home/alx/org). The
+   * beads repo stays mounted at /beads (BEADS_DIR), so `bd` works from
+   * /workspace too. Unset = legacy: beadsRepoDir doubles as /workspace.
+   */
+  workspaceDir?: string;
   beadsLabel?: string;
   beadsParentEpic?: string;
   artifactRepoDir?: string;
@@ -52,8 +59,33 @@ export interface Config {
   activityLog?: string;
   activityMaxBytes?: number;
   replyTimeoutMs?: number;
+  /** Deadline for a group to answer one of the brain's clarifying questions (ms). Default 30 min. */
+  questionTimeoutMs?: number;
   runTimeoutMs?: number;
   sandboxImage?: string;
+  /**
+   * Host herdr server socket, bind-mounted into the sandbox so in-container
+   * herdr CLIs reach the host server (org-5mdy). Panes spawned via pi-herdr
+   * are host-owned: they survive brain runs; the human sees them in herdr.
+   */
+  herdrSocketPath?: string;
+  /**
+   * Dedicated "home" pane the brain presents as its own (HERDR_PANE_ID): the
+   * split target for herdr_spawn_agent. Point it at a dedicated workspace
+   * (e.g. the "wa-bot" workspace) so spawned agents stay out of the
+   * operator's live work. Empty/omitted = herdr tools degrade (no --current).
+   */
+  herdrSpawnPane?: string;
+  /**
+   * Host install root of the pi-herdr package (org-5mdy.1): the pi-herdr
+   * launch plan injects `<pkg>/src/child.ts` into the child pi, which runs in
+   * a HOST pane — so the package must be loadable from a host-equal path.
+   * brain.ts bind-mounts this dir onto itself and points the pi packages
+   * list at `<dir>/node_modules/@andrewjacop/pi-herdr` instead of the
+   * image-baked /opt/pi-herdr. Omit = image-baked fallback (in-sandbox herdr
+   * children cannot start).
+   */
+  herdrPkgDir?: string;
   modelLock?: string;
   provider?: string;
   promptsFile?: string;

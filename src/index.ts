@@ -34,7 +34,8 @@ import qrcode = require('qrcode-terminal');
 import { loadConfig, Config, GroupEntry } from './config';
 import { parseAsk, parseRun } from './trigger';
 import { listAccountGroups } from './groups';
-import { runAsk, runRunMode } from './brain';
+import { runAsk, runRunMode, UiRequest, UiResponse } from './brain';
+import { formatQuestion, mapSelectReply } from './dialog';
 import { groupSlug, sessionHostDir, resetSession } from './session';
 
 const CFG: Config = loadConfig();
@@ -76,6 +77,85 @@ function rememberSent(id?: string): void {
   }
 }
 
+// ---------------- brain-question bridge (org-lsv8) ----------------
+// When the sandboxed brain asks a clarifying question (pi-ask-questions over
+// RPC extension UI), the question is posted in the GROUP and the next member
+// message in that group becomes the answer. One pending dialog per group.
+type PendingAnswer = { resolve: (text: string) => void };
+const pendingAnswers = new Map<string, PendingAnswer>(); // key: group JID
+/** Free text to auto-answer the follow-up "Type something." input (per JID). */
+const autoTypes = new Map<string, string>();
+
+/**
+ * The per-group onUiRequest handed to the brain: posts the question in the
+ * group, waits for the next member message there, maps it back to the RPC
+ * response. Owns the deadline (questionTimeoutMs) — brain just writes what
+ * this returns.
+ */
+function makeUiHandler(jid: string, groupName: string) {
+  return async (req: UiRequest): Promise<UiResponse> => {
+    const method = req.method;
+    if (method !== 'select' && method !== 'input') {
+      log('dialog method without WA equivalent, cancelling:', method);
+      return { cancelled: true };
+    }
+    // Follow-up input after the member picked "Type something.": the free text
+    // already sits in autoTypes — answer instantly, the group never sees it.
+    const auto = autoTypes.get(jid);
+    if (method === 'input' && auto !== undefined) {
+      autoTypes.delete(jid);
+      log('auto-answered typed question for', groupName);
+      activity('question_answered', { group: groupName, method, autoTyped: true, text: auto.slice(0, 300) });
+      return { value: auto };
+    }
+    const qTimeout = CFG.questionTimeoutMs ?? 1800000;
+    const deadline = Date.now() + qTimeout;
+    for (;;) {
+      if (CFG.dryRun) return { cancelled: true };
+      const question = formatQuestion(req);
+      safeSend(jid, (CFG.botPrefix ?? '') + question);
+      activity('question_asked', { group: groupName, method, question: question.slice(0, 500) });
+      const answer: string | null = await new Promise<string | null>((resolve) => {
+        // Identity-guarded: a stale deadline timer from a previous dialog must
+        // never clobber a newer pending entry for the same group.
+        let timer: NodeJS.Timeout;
+        const entry: PendingAnswer = {
+          resolve: (text: string) => {
+            clearTimeout(timer);
+            if (pendingAnswers.get(jid) === entry) pendingAnswers.delete(jid);
+            resolve(text);
+          },
+        };
+        pendingAnswers.set(jid, entry);
+        timer = setTimeout(() => {
+          if (pendingAnswers.get(jid) === entry) pendingAnswers.delete(jid);
+          resolve(null); // deadline — release the waiter
+        }, Math.max(0, deadline - Date.now()));
+      });
+      if (answer === null) {
+        log('question deadline reached — cancelling dialog for', groupName);
+        activity('question_timeout', { group: groupName, method });
+        return { cancelled: true };
+      }
+      if (method === 'input') {
+        activity('question_answered', { group: groupName, method, text: answer.slice(0, 300) });
+        if (!CFG.dryRun) safeSend(jid, (CFG.botPrefix ?? '') + '✅ Got it — continuing…');
+        return { value: answer };
+      }
+      // select
+      const mapped = mapSelectReply((req.options || []) as string[], answer);
+      if (mapped.value !== undefined) {
+        if (mapped.autoType !== undefined) autoTypes.set(jid, mapped.autoType);
+        activity('question_answered', { group: groupName, method, text: answer.slice(0, 300) });
+        if (!CFG.dryRun) safeSend(jid, (CFG.botPrefix ?? '') + '✅ Got it — continuing…');
+        return { value: mapped.value };
+      }
+      // hint and ask again (the deadline still bounds the loop)
+      if (!CFG.dryRun) safeSend(jid, (CFG.botPrefix ?? '') + (mapped.hint || 'Please pick one of the numbered options.'));
+    }
+  };
+}
+
 // ---------------- serial queue (one brain run at a time, bot-wide) ----------------
 let chain: Promise<unknown> = Promise.resolve();
 function enqueue(fn: () => Promise<void>): Promise<void> {
@@ -115,6 +195,16 @@ async function onMessage(m: Message): Promise<void> {
   if (body.startsWith('🤖')) { rememberSent(m.id && m.id.id); return; } // own (stateless)
   if (m.id && m.id.id && sentIds.has(m.id.id)) return; // own (id dedup)
 
+  // Pending brain question (org-lsv8): while the brain is asking THIS group a
+  // clarifying question, any member message is the answer — not a trigger.
+  const pending = remote ? pendingAnswers.get(remote) : undefined;
+  if (pending && remote) {
+    pendingAnswers.delete(remote);
+    log('DIALOG ANSWER', `[${group.name}]`, 'from', m.from, ':', body.slice(0, 200));
+    pending.resolve(body);
+    return;
+  }
+
   const ask = parseAsk(body);
   if (ask === null) return;
   const sessionId = groupSlug(remote ?? group.name);
@@ -153,9 +243,10 @@ async function onMessage(m: Message): Promise<void> {
   enqueue(async () => {
     const t0 = Date.now();
     try {
+      const uiHandler = remote ? makeUiHandler(remote, group.name) : undefined;
       const res = isRun
-        ? await runRunMode(group, effectiveAsk)
-        : await runAsk(group, ask === '' ? (brain.defaultAsk ?? '') : ask);
+        ? await runRunMode(group, effectiveAsk, uiHandler)
+        : await runAsk(group, ask === '' ? (brain.defaultAsk ?? '') : ask, uiHandler);
       // Keep newlines (one-item-per-line list format!) — only squeeze spaces.
       const pretty = res.text.replace(/[ \t]+/g, ' ').split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
       const reply = (CFG.botPrefix ?? '') + pretty;

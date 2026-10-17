@@ -61,3 +61,60 @@ Date: 2026-10-16. Verified empirically against live WhatsApp Web via wwebjs 1.34
 - `pkill -f` self-match hazard: a pattern that appears in the calling shell's
   own cmdline kills the shell (exit 143). Kill by PID via /proc cmdline scans.
 - Timestamps in logs are UTC; display them in local time in dashboards.
+
+## herdr (host)
+- User unit `herdr.service` (template `herdr.service` in repo root): guard runs
+  `herdr status server | grep '^status: running'` — already running → prints a
+  note and exits 0 (unit: inactive/exited, no duplicate); not running →
+  `exec herdr server` so systemd tracks the real process (Restart=on-failure).
+  Enabled via `systemctl --user enable herdr.service` (lingering user).
+- The herdr CLI honors `HERDR_SOCKET_PATH` for both client and server; tested
+  the not-running branch against a throwaway `/tmp/herdr-test.sock` so the live
+  server/panes were never touched.
+
+## Integration probes (org-lsv8.17, 2026-10-17)
+- **Per-group workspaces**: brain cwd is now the group's OWN dir
+  (`brain.workspaceDir`, mounted at /workspace, e.g. `workspaces/<brain>`),
+  NEVER a shared project repo. The beads repo is a separate /beads mount with
+  `BEADS_DIR=/beads/.beads` so bare `bd` resolves from any cwd. (User decision
+  17/10: no group brain operates inside /home/alx/org or similar.)
+- **pi-subagents dynamic tool activation**: default `toolActivation:"auto"`
+  HIDES the `subagent` tool in any session with history — it relies on the
+  model calling the `subagents_enable` loader tool first (fresh/empty sessions
+  get the tool eagerly; resumed group sessions don't). Verified live: same
+  image + flags, fresh `--no-session` → tool visible; resumed group session →
+  model correctly reports no `subagent`. Fix: materialized config now sets
+  `{ asyncByDefault:false, toolActivation:"eager" }`.
+- **herdr spawn from sandbox: FIXED (org-5mdy.1, 17/10 evening)**. Two
+  container-only paths were crossed into host panes; both now use HOST-EQUAL
+  paths (host dir bind-mounted onto itself):
+  1. **Agent dir**: pi-herdr seeds the child session file under
+     `<agentDir>/sessions/<cwd-encoded>`; container `/home/node/.pi/agent` is
+     unresolvable on the host → EACCES. Fix: runSandbox mounts
+     `piConfigDir` onto itself and sets `PI_CODING_AGENT_DIR` to it.
+  2. **Child extension**: the launch plan injects `<pkg>/src/child.ts`;
+     the image-baked `/usr/local/lib/node_modules/@andrewjacop/pi-herdr` does
+     not exist on the host. Fix: install pi-herdr once on the host in a
+     self-contained dir (its tarball bundles deps):
+     `mkdir -p ~/.local/share/wa-orchestrator/pi-herdr && cd $_ && npm init -y
+     && npm i @andrewjacop/pi-herdr@0.6.0`; config key `herdrPkgDir` makes
+     brain.ts mount it onto itself and point the pi packages list at
+     `<dir>/node_modules/@andrewjacop/pi-herdr` instead of /opt/pi-herdr.
+  Verified end-to-end: brain → herdr_spawn_agent → child pane on host (wa-bot
+  workspace) → child pi runs to `done` → session file seeded at the
+  host-equal `sandbox/pi-config/sessions/--workspace--/` → harvest returned.
+  Known surface: the child pi runs as the HOST user with the HOST
+  `~/.pi/agent` config (real provider creds), model pinned to the brain's
+  locked model; child cwd defaults to the parent's cwd (the group workspace
+  host dir) and has no BEADS_DIR — give host-path beads instructions
+  explicitly in the spawn prompt.
+- **Pane persistence**: host-owned panes survive `docker --rm` brain runs
+  (probe panes from container runs still present hours later); the probe
+  child pane `w4:p2` from the fixed run is still alive after the brain exited.
+- **Home pane moved**: the original `w2` (wa-bot) workspace was lost (server
+  state); recreated as **w4** — config `herdrSpawnPane: "w4:p1"`.
+  `herdr workspace create` takes the SERVER's cwd, not the client's.
+- **Debug note**: the model's "subagent not in my tool list" self-reports
+  were TRUE (not hallucination) — the registration was session-dependent
+  (auto activation), not process-level. Reproduced deterministically by
+  varying one docker flag at a time before changing anything.

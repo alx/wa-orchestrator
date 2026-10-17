@@ -3,7 +3,8 @@
  *
  * Every ask spawns:
  *   docker run --rm -i -u 1000:1000 -v <workspace>:/workspace \
- *     -v <pi-config>:/home/node/.pi/agent ... wa-orchestrator-sandbox \
+ *     -v <pi-config>:<pi-config> -e PI_CODING_AGENT_DIR=<pi-config> \
+ *     ... wa-orchestrator-sandbox \
  *     pi --mode rpc --no-session --provider gd --model <lock>
  *
  * The container's pi knows exactly ONE model (the lock) and ONE provider (gd).
@@ -53,6 +54,33 @@ export interface BrainResult {
 // gd-only, single-model pi config materialized from the host (org-b1g4.4).
 // The container never sees any other provider or credential.
 // ---------------------------------------------------------------------------
+/**
+ * pi packages the sandbox loads (local paths; pi loads them via settings.json):
+ * - pi-provider-gd: the gd model provider (materialized above)
+ * - pi-ask-questions: ask_questions tool → answered as a WhatsApp group dialog (org-lsv8)
+ * - pi-subagents: in-process child agents (org-5mdy): scout/reviewer/worker/oracle/delegate
+ * - pi-herdr: spawn/steer/wait/harvest agent panes in the HOST herdr server (org-5mdy)
+ *
+ * pi-herdr is loaded from the HOST install (herdrPkgDir) when set: its launch
+ * plan injects `<pkg>/src/child.ts` as the child extension, and the child pi
+ * runs in a HOST pane — so the package (like the agent dir, org-5mdy.1) must
+ * live at a host-equal path, which brain.ts bind-mounts onto itself. Falls
+ * back to the image-baked /opt/pi-herdr (child extension then cannot resolve
+ * on the host).
+ */
+export function piPackages(): string[] {
+  const herdrPkg = CFG.herdrPkgDir
+    ? `${CFG.herdrPkgDir}/node_modules/@andrewjacop/pi-herdr`
+    : '/opt/pi-herdr';
+  return ['/opt/pi-provider-gd', '/opt/pi-ask-questions', '/opt/pi-subagents', herdrPkg];
+}
+
+/** Docker args mounting the host pi-herdr install onto itself (org-5mdy.1). */
+export function herdrPkgArgs(dir?: string): string[] {
+  const d = dir ?? (CFG.herdrPkgDir as string | undefined);
+  return d ? ['-v', `${d}:${d}`] : [];
+}
+
 export function materializePiConfig(): void {
   const hostDir = CFG.hostPiAgentDir as string;
   const provider = CFG.provider as string;
@@ -77,11 +105,23 @@ export function materializePiConfig(): void {
   const gdCfg = (hostModels && hostModels.providers && hostModels.providers[provider]) || {};
   fs.writeFileSync(path.join(cfgDir, 'models.json'), JSON.stringify({ providers: { [provider]: gdCfg } }, null, 1), { mode: 0o600 });
   const settings = {
-    packages: ['/opt/pi-provider-gd'],
+    packages: piPackages(),
     defaultProvider: provider,
     defaultModel: CFG.modelLock,
   };
   fs.writeFileSync(path.join(cfgDir, 'settings.json'), JSON.stringify(settings, null, 1), { mode: 0o600 });
+  // pi-subagents (org-5mdy):
+  // - child agents must be BLOCKING by default — the one-shot RPC brain is
+  //   SIGKILLed on agent_settled, so an async (detached) child would die
+  //   mid-work. Explicit per-call async:true still works.
+  // - toolActivation "eager": the default "auto" mode HIDES the `subagent`
+  //   tool in any session that already has history (it relies on a
+  //   `subagents_enable` loader call the model has to know to make) — verified
+  //   in probes 2026-10-17: fresh sessions see the tool, resumed group
+  //   sessions don't. The brain must always have it.
+  const subagentCfgDir = path.join(cfgDir, 'extensions', 'subagent');
+  fs.mkdirSync(subagentCfgDir, { recursive: true });
+  fs.writeFileSync(path.join(subagentCfgDir, 'config.json'), JSON.stringify({ asyncByDefault: false, toolActivation: 'eager' }, null, 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -111,31 +151,34 @@ let _prompts: Record<string, string> | null = null;
 // Minimal safe defaults (no project names) used when no prompts file exists.
 const GENERIC_PROMPTS: Record<string, string> = {
   'beads.ask.first':
-    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.\n' +
+    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory is /workspace — this group\'s own work area. The beads repo is mounted at /beads; the `bd` CLI works from any directory (BEADS_DIR is preset).\n' +
     'You may only: 1) LIST/SHOW beads with the label "{{label}}" (read-only), e.g. `bd list --label {{label}} -s open` or `bd show <id>`; 2) CREATE a bead: `bd create "<concise title>" -l {{label}} --no-inherit-labels --parent {{parentEpic}}`.\n' +
-    'Use ONLY the `bd` CLI; never modify any files. Never touch beads without the "{{label}}" label. Reply with SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
+    'Use ONLY the `bd` CLI; never modify any files. Never touch beads without the "{{label}}" label.\n' +
+    'MULTI-AGENT: for complex multi-part requests you may delegate to child agents (`subagent` tool: scout to find, reviewer to check, delegate for simple sub-tasks; parallel allowed) — children run in this same sandbox with the same constraints. Keep it to 1-3 children, then synthesise.\n' +
+    'Reply with SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
   'beads.ask.turn':
     'Follow-up in the same WhatsApp group conversation — context from earlier turns is already in this session.\n\nRequest:\n{{ask}}\n\nUse what you already know from this conversation; only re-run bd commands when the data may have changed. Reply with SHORT plain WhatsApp text only (lists: one item per line, each starting with "• "). Your final chat message is posted verbatim to the group.',
   'beads.ask':
-    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) IS the beads repository — run bd commands here.\n' +
+    'You are "{{botName}}", a WhatsApp group assistant. You manage beads (issue tracker) using the `bd` CLI. Your working directory is /workspace — this group\'s own work area. The beads repo is mounted at /beads; the `bd` CLI works from any directory (BEADS_DIR is preset).\n' +
     'You may only: 1) LIST/SHOW beads with the label "{{label}}" (read-only), e.g. `bd list --label {{label}} -s open` or `bd show <id>`; 2) CREATE a bead: `bd create "<concise title>" -l {{label}} --no-inherit-labels --parent {{parentEpic}}`.\n' +
     'Use ONLY the `bd` CLI; never modify any files. Never touch beads without the "{{label}}" label. Reply with SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
   'beads.run':
     'You are "{{botName}}" executing bead {{beadId}} INSIDE THIS SANDBOX. No user is present — finish the work end to end.\n' +
     'The bead (your spec):\n---\n{{beadSpec}}\n---\n' +
-    'Environment: /task = your read-write work area (put ALL produced files here); /workspace = the beads repo (read-only, except bd show/comment/close on {{beadId}}).\n' +
+    'Environment: /task = your read-write work area (put ALL produced files here); /workspace = the group\'s work area (do not write there during a run); the beads repo is at /beads — `bd` works from any directory, and you may only bd show/comment/close on {{beadId}}.\n' +
     'Implement exactly what the bead asks; if it is code, actually RUN it to verify before finishing.\n' +
     'When done AND verified: bd comment {{beadId}} "<2-3 line summary>" then bd close {{beadId}}. If blocked: bd comment {{beadId}} "blocked: <why>" and do NOT close.\n' +
     'Final chat message (posted verbatim to the WhatsApp group): 1-3 short plain lines.',
   'cpo.ask.first':
-    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.\n' +
+    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory is /workspace — this group\'s own work area. The project beads repo is mounted at /beads; the `bd` CLI works from any directory (BEADS_DIR is preset).\n' +
     'The project beads are exactly the epics {{epics}} WITH ALL THEIR CHILDREN (an id belongs if it equals an epic id or starts with "<epic-id>."). To list them use this exact recipe (copy verbatim): {{recipe}}  — to show one: `bd show <id>`; one epic\'s subtree: `bd list --parent <epic-id> -s all`.\n' +
     'You are READ-ONLY: never create, update, close, claim, comment, sync or delete anything, and never modify any file. If a bd command fails with a lock/gate error, retry it once.\n' +
+    'MULTI-AGENT: you have two delegation primitives — (a) `subagent` tool: in-process child agents (scout/reviewer/worker/oracle/delegate, parallel) that share this sandbox; (b) herdr tools: `herdr_spawn_agent` starts a VISIBLE agent pane on the operator\'s machine (survives this conversation; the human can watch and type in it), then `herdr_wait_output`/`herdr_get_agent_result` to collect, `herdr_message_agent` to steer later, `herdr_interrupt_agent` to stop. Use herdr only for clearly long-running or parallel sub-work.\n' +
     'Answer in the language of the request. SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
   'cpo.ask.turn':
     'Follow-up in the same WhatsApp group conversation — context from earlier turns is already in this session.\n\nRequest:\n{{ask}}\n\nUse what you already know from this conversation (the scoped-beads recipe was given at the start of the session); only re-run bd commands when the data may have changed. Reply with SHORT plain WhatsApp text only (lists: one item per line, each starting with "• "). Your final chat message is posted verbatim to the group.',
   'cpo.ask':
-    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory (/workspace) is the project beads repository — run bd commands there.\n' +
+    'You are "{{botName}}", a WhatsApp group assistant. You answer questions about the project\'s beads (issue tracker) using the `bd` CLI. Your working directory is /workspace — this group\'s own work area. The project beads repo is mounted at /beads; the `bd` CLI works from any directory (BEADS_DIR is preset).\n' +
     'The project beads are exactly the epics {{epics}} WITH ALL THEIR CHILDREN (an id belongs if it equals an epic id or starts with "<epic-id>."). To list them use this exact recipe (copy verbatim): {{recipe}}  — to show one: `bd show <id>`; one epic\'s subtree: `bd list --parent <epic-id> -s all`.\n' +
     'You are READ-ONLY: never create, update, close, claim, comment, sync or delete anything, and never modify any file. If a bd command fails with a lock/gate error, retry it once.\n' +
     'Answer in the language of the request. SHORT plain WhatsApp text only; lists: one item per line, each starting with "• ".\n\nRequest from a group member:\n{{ask}}',
@@ -243,31 +286,104 @@ export interface GroupSession {
   hostDir: string;
 }
 
+/**
+ * Extension UI dialog request from pi (org-lsv8). Wire records are pi's,
+ * intentionally minimally typed. Dialog methods (select/input/confirm/editor)
+ * block until an extension_ui_response with the same id is written back.
+ */
+export interface UiRequest {
+  id: string;
+  method: string;
+  title?: string;
+  message?: string;
+  options?: string[];
+  placeholder?: string;
+  [k: string]: unknown;
+}
+
+export interface UiResponse {
+  value?: string;
+  confirmed?: boolean;
+  cancelled?: boolean;
+}
+
 interface RunSandboxOpts {
   /** full prompt message */
   prompt: string;
-  /** host dir mounted at /workspace */
+  /**
+   * host dir mounted at /workspace — the GROUP'S OWN work area (org-lsv8.17
+   * decision: never a shared project repo like /home/alx/org; one workspace
+   * per group, e.g. workspaces/<brain>/). Falls back to beadsRepoDir when
+   * unset (legacy brains).
+   */
   workspace: string;
+  /** host beads repo dir mounted at /beads; BEADS_DIR points `bd` at it from any cwd */
+  beadsDir?: string;
   timeoutMs: number;
   /** the group's conversation session (org-1v4b) */
   session: GroupSession;
   /** [hostPath, containerPath] pairs */
   extraVolumes?: [string, string][];
+  /** Answer an extension UI dialog (brain questions over WhatsApp, org-lsv8). */
+  onUiRequest?: (req: UiRequest) => Promise<UiResponse> | UiResponse;
 }
 
-async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs: number }> {
-  const { prompt, workspace, timeoutMs, session, extraVolumes = [] } = o;
+/**
+ * Docker args wiring the in-sandbox herdr client to the HOST herdr server
+ * (org-5mdy): bind-mount the single server socket file + point the client at
+ * it. Panes spawned this way are host-owned: they survive `docker --rm` brain
+ * runs and the human can see/attach to them in the herdr TUI. No-op when
+ * herdrSocketPath is unset or the socket is absent (herdr tools will simply
+ * fail in-sandbox, brain falls back to in-process subagents).
+ */
+export function herdrSocketArgs(sock?: string, spawnPane?: string): string[] {
+  const p = sock ?? (CFG.herdrSocketPath as string | undefined);
+  if (!p || !fs.existsSync(p)) return [];
+  const args = ['-v', `${p}:/herdr/herdr.sock`, '-e', 'HERDR_SOCKET_PATH=/herdr/herdr.sock'];
+  // pi-herdr resolves `--current` (herdr_spawn_agent's split target) from
+  // HERDR_PANE_ID. The brain is not a real pane, so it presents the dedicated
+  // "wa-bot" home pane as its own: spawned agents fan out inside that
+  // workspace, away from the operator's live work.
+  const home = spawnPane ?? (CFG.herdrSpawnPane as string | undefined);
+  if (home) args.push('-e', `HERDR_PANE_ID=${home}`);
+  return args;
+}
+
+/**
+ * Docker args for the pi config/agent dir at a HOST-EQUAL path (org-5mdy.1).
+ * pi-herdr seeds the child session file under <agentDir>/sessions/<cwd-encoded>
+ * and passes that absolute path to the child pi, which runs in a HOST pane —
+ * only a path that is textually identical on host and container resolves in
+ * both. Mounts the same host dir onto itself and pins pi to it (instead of
+ * $HOME/.pi/agent, where the seeded path would be container-only → EACCES
+ * on the host).
+ */
+export function agentDirArgs(cfgDir: string): string[] {
+  return ['-v', `${cfgDir}:${cfgDir}`, '-e', `PI_CODING_AGENT_DIR=${cfgDir}`];
+}
+
+export async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs: number }> {
+  const { prompt, workspace, beadsDir, timeoutMs, session, extraVolumes = [] } = o;
   const t0 = Date.now();
   const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
   const gid = typeof process.getgid === 'function' ? process.getgid() : 1000;
+  // The beads repo is a SEPARATE mount from the group workspace (org-lsv8.17):
+  // /workspace is the group's own dir, /beads is the shared beads DB. BEADS_DIR
+  // makes the bare `bd` CLI resolve the DB from any cwd.
+  const beadsArgs = beadsDir
+    ? ['-v', `${beadsDir}:/beads`, '-e', 'BEADS_DIR=/beads/.beads']
+    : [];
   const args = [
     'run', '--rm', '-i',
     '-u', `${uid}:${gid}`,
     '-e', 'PI_OFFLINE=1',
     '-e', 'HOME=/home/node',
     '-v', `${workspace}:/workspace`,
-    '-v', `${CFG.piConfigDir}:/home/node/.pi/agent`,
+    ...beadsArgs, // beads repo at /beads (org-lsv8.17)
+    ...agentDirArgs(CFG.piConfigDir as string), // host-equal pi agent dir (org-5mdy.1)
+    ...herdrPkgArgs(), // host pi-herdr install, host-equal (org-5mdy.1)
     '-v', `${session.hostDir}:/sessions`, // per-group conversation volume (org-1v4b)
+    ...herdrSocketArgs(), // herdr socket → HOST server (org-5mdy)
     ...extraVolumes.flatMap(([h, c]) => ['-v', `${h}:${c}`]),
     CFG.sandboxImage as string,
     '--mode', 'rpc',
@@ -298,14 +414,21 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
       reject(err);
     };
-    const timer = setTimeout(() => fail(new Error(`brain timeout after ${timeoutMs}ms`)), timeoutMs);
+    let timer: NodeJS.Timeout;
+    const armTimer = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => fail(new Error(`brain timeout after ${timeoutMs}ms`)), timeoutMs);
+    };
+    armTimer();
 
     const finish = (): void => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+      // Check BEFORE settling: fail() no-ops when settled is already true,
+      // so a no-text finish would otherwise leave the promise hanging.
       const text = lastAssistantText.trim();
       if (!text) return fail(new Error('agent_settled but no assistant text'));
+      settled = true;
+      clearTimeout(timer);
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
       resolve({ text, durationMs: Date.now() - t0 });
     };
@@ -313,7 +436,7 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
     const sendCommand = (obj: Record<string, unknown>): void => { child.stdin.write(JSON.stringify(obj) + '\n'); };
 
     // pi RPC wire records — intentionally untyped (wire format is pi's, not ours).
-    const onRecord = (rec: any): void => {
+    const onRecord = async (rec: any): Promise<void> => {
       if (rec.type === 'response' && rec.command === 'get_state') {
         if (!rec.success) return fail(new Error('get_state failed: ' + (rec.error || 'unknown')));
         const modelId = rec.data && rec.data.model && rec.data.model.id;
@@ -336,9 +459,44 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
         return;
       }
       if (rec.type === 'agent_settled') {
-        if (rec.aborted) return fail(new Error('agent run aborted'));
+        if (rec.aborted) return fail(new Error('agent run aborted: ' + JSON.stringify(rec.data || {}).slice(0, 300)));
         if (!promptSent) return fail(new Error('agent_settled before prompt was accepted'));
         return finish();
+      }
+      // Diagnostic: never swallow wire records we don't act on — silent
+      // settlements without assistant text were invisible without this.
+      if (rec.type !== 'extension_ui_request') {
+        log('unhandled record:', rec.type, JSON.stringify(rec).slice(0, 400));
+      }
+      if (rec.type === 'extension_ui_request') {
+        // Brain clarifying questions (org-lsv8): pi's extension UI sub-protocol.
+        // Dialog methods block the agent until we write extension_ui_response
+        // with the matching id; the WhatsApp bridge (index.ts) answers them.
+        const method = String(rec.method || '');
+        const isDialog = method === 'select' || method === 'input' || method === 'confirm' || method === 'editor';
+        if (!isDialog) {
+          log('extension ui (fire-and-forget):', method, JSON.stringify(rec).slice(0, 200));
+          return;
+        }
+        const id = String(rec.id);
+        log('extension ui dialog:', method, 'id=', id);
+        clearTimeout(timer); // pause the run timeout while the group is being asked
+        let resp: UiResponse | undefined;
+        try {
+          resp = o.onUiRequest ? await o.onUiRequest(rec as UiRequest) : { cancelled: true };
+        } catch (e) {
+          log('onUiRequest threw — cancelling dialog:', (e as Error).message);
+          resp = { cancelled: true };
+        }
+        const out: Record<string, unknown> = { type: 'extension_ui_response', id };
+        if (resp && resp.cancelled) out.cancelled = true;
+        else if (resp && resp.value !== undefined) out.value = String(resp.value);
+        else if (resp && typeof resp.confirmed === 'boolean') out.confirmed = resp.confirmed;
+        else out.cancelled = true;
+        try { sendCommand(out); } catch (e) { log('failed to write extension_ui_response:', (e as Error).message); }
+        log('extension ui response:', method, JSON.stringify(out).slice(0, 300));
+        armTimer();
+        return;
       }
     };
 
@@ -352,7 +510,7 @@ async function runSandbox(o: RunSandboxOpts): Promise<{ text: string; durationMs
         let rec: any;
         try { rec = JSON.parse(line); }
         catch { log('non-JSON stdout line:', line.slice(0, 200)); continue; }
-        try { onRecord(rec); } catch (e) { fail(e as Error); }
+        void onRecord(rec).catch((e) => fail(e as Error));
       }
     });
 
@@ -378,7 +536,10 @@ export function groupSession(group: GroupEntry, brain: BrainProfile): GroupSessi
   return { id, hostDir };
 }
 
-export async function runAsk(group: GroupEntry, ask: string): Promise<BrainResult> {
+export async function runAsk(
+  group: GroupEntry, ask: string,
+  onUiRequest?: (req: UiRequest) => Promise<UiResponse> | UiResponse,
+): Promise<BrainResult> {
   const brain = CFG.brains[group.brain];
   if (!brain) throw new Error(`unknown brain profile "${group.brain}"`);
   materializePiConfig();
@@ -389,19 +550,25 @@ export async function runAsk(group: GroupEntry, ask: string): Promise<BrainResul
     : buildBeadsPrompt(ask, brain, isFirstTurn);
   const res = await runSandbox({
     prompt,
-    workspace: brain.beadsRepoDir as string,
+    // per-group workspace, NOT the shared beads repo (org-lsv8.17 decision)
+    workspace: (brain.workspaceDir as string) || (brain.beadsRepoDir as string),
+    beadsDir: brain.beadsRepoDir as string,
     timeoutMs: CFG.replyTimeoutMs as number,
     session,
+    onUiRequest,
   });
   return { text: res.text, durationMs: res.durationMs };
 }
 
-export async function runRunMode(group: GroupEntry, arg: string): Promise<BrainResult> {
+export async function runRunMode(
+  group: GroupEntry, arg: string,
+  onUiRequest?: (req: UiRequest) => Promise<UiResponse> | UiResponse,
+): Promise<BrainResult> {
   const brain = CFG.brains[group.brain];
   if (!brain) throw new Error(`unknown brain profile "${group.brain}"`);
   const session = groupSession(group, brain);
-  if (brain.kind === 'cpo') return runSiteEdit(arg, brain, session);
-  return runBead(arg, brain, session);
+  if (brain.kind === 'cpo') return runSiteEdit(arg, brain, session, onUiRequest);
+  return runBead(arg, brain, session, onUiRequest);
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +633,10 @@ function collectTaskArtifacts(id: string, title: string, brain: BrainProfile): s
   }
 }
 
-async function runBead(rawId: string, brain: BrainProfile, session: GroupSession): Promise<BrainResult> {
+async function runBead(
+  rawId: string, brain: BrainProfile, session: GroupSession,
+  onUiRequest?: (req: UiRequest) => Promise<UiResponse> | UiResponse,
+): Promise<BrainResult> {
   const id = String(rawId || '').trim();
   if (!/^[a-z]+-[a-z0-9]{3,10}(\.\d+)?$/i.test(id)) {
     return { text: `That doesn't look like a bead id ("${rawId}"). Usage: pi ${brain.runCmd} <bead-id>` };
@@ -488,10 +658,12 @@ async function runBead(rawId: string, brain: BrainProfile, session: GroupSession
 
   const res = await runSandbox({
     prompt: buildRunPrompt(bead, brain),
-    workspace: brain.beadsRepoDir as string,
+    workspace: (brain.workspaceDir as string) || (brain.beadsRepoDir as string),
+    beadsDir: brain.beadsRepoDir as string,
     timeoutMs: CFG.runTimeoutMs as number,
     session,
     extraVolumes: [[taskDir, '/task']],
+    onUiRequest,
   });
 
   const branch = collectTaskArtifacts(id, bead.title, brain);
@@ -509,7 +681,10 @@ async function runBead(rawId: string, brain: BrainProfile, session: GroupSession
 // sandbox, verify with hugo, commit + push origin main (→ GitHub Pages).
 // Host-side verification: main must actually have moved, otherwise warn.
 // ---------------------------------------------------------------------------
-async function runSiteEdit(instruction: string, brain: BrainProfile, session: GroupSession): Promise<BrainResult> {
+async function runSiteEdit(
+  instruction: string, brain: BrainProfile, session: GroupSession,
+  onUiRequest?: (req: UiRequest) => Promise<UiResponse> | UiResponse,
+): Promise<BrainResult> {
   const instr = String(instruction || '').trim();
   if (!instr) return { text: 'Usage: pi edit <what to change on the site>' };
   let preSha = '';
@@ -520,7 +695,8 @@ async function runSiteEdit(instruction: string, brain: BrainProfile, session: Gr
 
   const res = await runSandbox({
     prompt: buildSitePrompt(instr, brain),
-    workspace: brain.beadsRepoDir as string, // live CPO beads DB (agent is prompt-scoped read-only)
+    workspace: (brain.workspaceDir as string) || (brain.beadsRepoDir as string),
+    beadsDir: brain.beadsRepoDir as string, // live CPO beads DB (agent is prompt-scoped read-only)
     timeoutMs: CFG.runTimeoutMs as number,
     session,
     extraVolumes: [
@@ -528,6 +704,7 @@ async function runSiteEdit(instruction: string, brain: BrainProfile, session: Gr
       [path.join(CFG.gitHomeDir as string, '.gitconfig'), '/home/node/.gitconfig'],
       [path.join(CFG.gitHomeDir as string, '.git-credentials'), '/home/node/.git-credentials'],
     ],
+    onUiRequest,
   });
 
   let postSha = '';
