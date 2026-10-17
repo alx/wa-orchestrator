@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wa-orchestrator — multi-group WhatsApp orchestrator</title>
+<meta name="description" content="One process, one WhatsApp account, N groups, one brain per group. Sandboxed pi agent in Docker.">
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'default' });
+</script>
+<style>
+:root { --ink:#1a1a1a; --accent:#FAB617; --cream:#F5EFE4; --line:#e2ded4; }
+body { margin:0; font:16px/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--cream); }
+main { max-width:46rem; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+header.hero { background:var(--ink); color:var(--cream); padding:3.5rem 1.25rem; }
+header.hero .inner { max-width:46rem; margin:0 auto; }
+h1 { font-size:2rem; margin:0 0 .5rem; letter-spacing:-.02em; }
+h1 .tag { display:inline-block; background:var(--accent); color:var(--ink); border-radius:.35rem; padding:.05rem .5rem; font-size:1.1rem; vertical-align:middle; margin-left:.5rem; }
+.sub { font-size:1.15rem; opacity:.92; margin-top:.75rem; }
+h2 { margin-top:2.25rem; font-size:1.25rem; border-bottom:2px solid var(--accent); display:inline-block; padding-bottom:.2rem; }
+pre { background:#232323; color:#f2f2f2; padding:1rem; border-radius:.5rem; overflow-x:auto; font-size:.85rem; line-height:1.45; }
+code { font-family:ui-monospace,Menlo,Consolas,monospace; }
+:not(pre) > code { background:#e8e2d4; padding:.1rem .35rem; border-radius:.25rem; font-size:.88em; }
+table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.95rem; }
+th,td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; }
+th { background:#e8e2d4; }
+a { color:#8a6d00; }
+ul,ol { padding-left:1.4rem; }
+li { margin:.25rem 0; }
+.badge { display:inline-block; background:var(--ink); color:var(--cream); border-radius:.35rem; padding:.1rem .55rem; font-size:.8rem; }
+footer { margin-top:3rem; font-size:.85rem; opacity:.7; }
+.flow { background:#232323; color:#cfcfcf; padding:1rem; border-radius:.5rem; font-size:.8rem; overflow-x:auto; white-space:pre; }
+.mermaid { background:#fff; border:1px solid var(--line); border-radius:.5rem; padding:1rem; margin:1rem 0; text-align:center; overflow-x:auto; }
+</style>
+</head>
+<body>
+<header class="hero"><div class="inner">
+<h1>wa-orchestrator <span class="tag">1 process · N groups</span></h1>
+<p class="sub">One WhatsApp account, registered groups, and a <strong>brain per
+group</strong>: a <a href="https://pi.dev">pi</a> 1.2.0 agent run inside a
+sandboxed Docker container, with a locked LLM model.</p>
+</div></header>
+<main>
+
+<h2>Architecture</h2>
+<div class="flow">WhatsApp ──wwebjs──▶ index.js ──per group──▶ brain.js ──docker──▶ container
+ (1 account)          registry                 docker run           pi agent
+                                                             ├─ /workspace = the group's own work dir
+                                                             ├─ /beads     = beads repo (bd via BEADS_DIR)
+                                                             ├─ tools (git, hugo…)
+                                                             ├─ subagent (in-process child agents)
+                                                             ├─ herdr (host server over mounted socket)
+                                                             └─ 1 brain ≠ 1 group</div>
+<p>The brain is chosen <strong>per group</strong> (the <code>brain</code> field
+of the registry), not per message nor per server. Two profiles ship by default:</p>
+<table>
+<tr><th>profile</th><th>free-text <code>pi …</code></th><th>run modes</th></tr>
+<tr><td><code>beads-project</code></td><td>project beads (list/create by label)</td><td><code>pi run &lt;bead&gt;</code> → executes the bead, artifacts on branch <code>task/&lt;id&gt;</code></td></tr>
+<tr><td><code>site-project</code></td><td>scoped read-only beads (live Dolt DB, filtered to a set of epics)</td><td><code>pi edit &lt;instruction&gt;</code> → edits the site, verifies the build, <strong>commit + push</strong></td></tr>
+</table>
+
+<h2>Diagrams</h2>
+<p>Rendered client-side with <a href="https://mermaid.js.org/">mermaid.js</a> (CDN, no build step).</p>
+
+<h3>1 · The application once running</h3>
+<div class="mermaid">
+flowchart LR
+  WA["📱 WhatsApp<br/>(owner account — 1 client)"]
+  subgraph HOST["host — one process"]
+    IDX["index.js<br/>wwebjs · Xvfb · trigger: pi …"]
+    REG["registry<br/>groups[] → brain"]
+    BRAIN["brain.js"]
+    DASH["dashboard.js :8093"]
+  end
+  subgraph BOX["sandbox container (one docker run per brain call)"]
+    PI["pi agent 1.2.0<br/>model locked"]
+    ASK["ask_questions ext<br/>(pi-ask-questions · pinned)"]
+    SUB["subagent tool<br/>(pi-subagents · in-process children)"]
+    HDRT["herdr tools<br/>(pi-herdr · host panes)"]
+    FS["mounts: /workspace = group's own dir · /beads = beads DB (BEADS_DIR)<br/>site checkout · git-home · herdr.sock (host socket)"]
+  end
+  HSRV["host herdr server<br/>(herdr.service · user unit)"]
+  SESS[("conversations/&lt;brain&gt;/&lt;group-slug&gt;/&lt;created&gt;_&lt;slug&gt;_.jsonl")]
+  CFG[("config.json")]
+  PROMPTS[("brain-prompts.json")]
+  ACT[("activity.jsonl")]
+  WA <-->|message_create · sendMessage| IDX
+  CFG -.-> REG
+  REG -->|group → brain profile| BRAIN
+  PROMPTS -.-> BRAIN
+  IDX --> BRAIN
+  BRAIN -->|"docker run --session-id &lt;slug&gt; --session-dir /sessions"| PI
+  SESS -.->|"/sessions volume (one dir per group)"| PI
+  PI <--> FS
+  PI <-->|"ask_questions → extension_ui_request (RPC)"| BRAIN
+  PI <--> SUB
+  HDRT -.->|"bind-mounted socket — HERDR_SOCKET_PATH"| HSRV
+  HSRV -->|"host-owned panes survive docker --rm"| HSRV
+  WA <-->|"clarifying question ⇄ numbered answer"| IDX
+  PI -->|final reply text| BRAIN
+  BRAIN --> IDX
+  IDX -->|🤖 prefixed reply| WA
+  IDX -.->|append asks · replies · runs| ACT
+  ACT -.->|read| DASH
+</div>
+
+<h3>2 · One group message → one AI reply</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  actor M as Group member
+  participant WA as WhatsApp
+  participant I as index.js (wwebjs)
+  participant B as brain.js
+  participant C as sandbox (pi agent)
+  M->>WA: pi {ask} (in the group)
+  WA->>I: message_create
+  I->>I: own-message filter (🤖 prefix · rolling sent-id set)
+  I->>I: trigger check (body = pi or starts with pi )
+  I->>WA: sendMessage 🤖 on it — the brain is thinking…
+  I->>B: resolve brain (registry: group → profile)
+  B->>C: docker run --session-id group-slug --session-dir /sessions (first-turn prompt + /workspace + /beads mounts)
+  C->>C: work (bd list · edit site + hugo build)
+  opt brain delegates (subagent tool — in-process)
+    C->>C: child agent (scout/reviewer/worker/oracle/delegate) runs in the SAME sandbox, same constraints
+    C->>C: child result feeds back into the brain's reply
+  end
+  opt brain spawns a visible host agent (herdr tools)
+    C-->>B: herdr_spawn_agent → pane appears on the operator's machine (host herdr server)
+    Note over C,B: pane is HOST-OWNED: survives this docker --rm run — the human can watch and type in it
+    C->>C: herdr_wait_output / herdr_get_agent_result (harvest)
+  end
+  opt brain needs a decision (ask_questions tool)
+    C-->>B: extension_ui_request select (id + numbered options)
+    B-->>I: onUiRequest (run timeout paused meanwhile)
+    I->>WA: sendMessage 🤖 question + numbered options (1 · 2 · … · Type something.)
+    WA->>M: question posted in the group
+    M->>WA: reply "2" — or free text (consumed as THE answer, not a trigger)
+    WA->>I: message_create
+    I-->>B: mapped answer (exact option line / typed text)
+    B->>C: extension_ui_response (stdin, same id)
+  end
+  C-->>B: final reply text
+  B-->>I: reply
+  I->>WA: sendMessage 🤖 {reply}
+  WA->>M: reply posted in the group
+  Note over M,I: no answer within questionTimeoutMs (default 30 min) → dialog cancelled, brain continues
+  Note over M,C: — later, same group (continuous conversation) —
+  M->>WA: pi {follow-up}
+  WA->>I: message_create
+  I->>B: runAsk (same group → same session id)
+  B->>C: docker run --session-id same-slug (slim turn prompt · session file resumes)
+  C->>C: continues the conversation (context from the session file)
+  C-->>B: final reply text
+  B-->>I: reply
+  I->>WA: sendMessage 🤖 {reply}
+  WA->>M: reply posted in the group
+  Note over M,I: "pi new" → host renames the group's session dir aside → next message = fresh first turn
+</div>
+
+<h2>Quickstart</h2>
+<pre>npm install
+bash sandbox/build.sh          # docker image (pi, bd, jq, hugo_extended + pinned pi packages:
+                               # provider, ask-questions, pi-subagents, pi-herdr + herdr client)
+cp config.template.json config.json   # fill JIDs + absolute paths
+cp brain-prompts.template.json brain-prompts.json   # adapt prompts
+# user-scoped systemd units provided (fill &lt;HOME&gt;/&lt;NODE_BIN&gt;):
+systemctl --user enable --now wa-orchestrator wa-orchestrator-dashboard</pre>
+<p>Prereqs: docker, <code>xvfb-run</code>, system Chromium, node ≥ 22.
+The WhatsApp session lives in <code>sessions/</code> — <strong>one client per
+account</strong>, never two instances at once. Prompts load from
+<code>brain-prompts.json</code> (gitignored); without it the bot falls back to
+minimal generic built-in prompts.</p>
+
+<h2>Conversations (continuous memory per group)</h2>
+<p>Each registered <strong>group</strong> holds one continuous conversation, persisted as a pi session on the host — the bot is <em>not</em> stateless per message. The first turn of a conversation renders the full prompt (<code>*.ask.first</code>: identity, environment, hard rules); every later turn renders a slim continuation (<code>*.ask.turn</code>), because the session already holds the first-turn context. Run-mode calls (<code>run</code>/<code>edit</code>) land in the <em>same</em> group conversation, so a member can ask, order an edit, and check the result across messages.</p>
+<ul>
+<li><strong>Reset:</strong> send <code>pi new</code> in the group — the bot renames the group's session dir aside; the next message starts a fresh first turn.</li>
+<li><strong>Storage:</strong> <code>&lt;conversationDir&gt;/&lt;group-slug&gt;/&lt;created&gt;_&lt;slug&gt;.jsonl</code> per brain profile (one dir per group). Deleting it = amnesia; the bot keeps running.</li>
+<li><strong>Containers stay disposable</strong> (<code>docker run --rm</code>): continuity comes from the session <em>file</em>, and the model lock is re-verified on every start — resumed sessions included.</li>
+</ul>
+
+<h2>Clarifying questions (structured Q&A in the group)</h2>
+<p>When a requirement is blurry, the brain asks the <strong>group</strong> instead of guessing: the sandbox ships the <a href="https://www.npmjs.com/package/@adeildo/pi-ask-questions"><code>pi-ask-questions</code></a> extension (pinned, loaded via the local-path <code>packages</code> list in the host-generated <code>settings.json</code>), which registers an <code>ask_questions</code> tool. Over RPC it becomes a normal <code>extension_ui_request</code>/<code>extension_ui_response</code> dialog that <code>brain.js</code> bridges to the group:</p>
+<ol>
+<li>The brain calls <code>ask_questions</code> → pi emits a <code>select</code> (or <code>input</code>) request → the bot posts the question in the group with <strong>numbered options</strong> plus a “Type something.” row for free text.</li>
+<li>The <strong>next member message in that group</strong> is the answer — a number picks that exact option; free text takes the typed row (the follow-up <code>input</code> dialog is answered automatically, the group never sees it).</li>
+<li>The run timeout is <strong>paused</strong> while the group is being asked; no answer within <code>questionTimeoutMs</code> (default 30 min) → the dialog is cancelled and the brain continues.</li>
+</ol>
+<p>Activity log: <code>question_asked</code> / <code>question_answered</code> / <code>question_timeout</code> entries.</p>
+
+<h2>Multi-agent primitives (delegation)</h2>
+<p>The sandbox bakes in two pinned delegation layers, so a brain is never stuck doing everything itself:</p>
+<ul>
+<li><strong><code>subagent</code> tool</strong> (<a href="https://www.npmjs.com/package/pi-subagents"><code>pi-subagents</code></a>, in-process): the brain launches child agents — <code>scout</code> to find, <code>reviewer</code> to check, <code>worker</code> to build, <code>oracle</code> to consult, <code>delegate</code> for simple sub-tasks — in the <em>same</em> sandbox under the <em>same</em> constraints and model lock. Children are blocking by default (the one-shot RPC brain is SIGKILLed on settle, so a detached child would die mid-work); parallel children are allowed. Config is materialized per run: <code>{"asyncByDefault": false, "toolActivation": "eager"}</code> — eager, because the default "auto" mode hides the tool in any session with history.</li>
+<li><strong>herdr tools</strong> (<a href="https://www.npmjs.com/package/@andrewjacop/pi-herdr"><code>pi-herdr</code></a>, host panes): <code>herdr_spawn_agent</code> starts a <strong>visible agent pane on the operator's machine</strong>. The in-container herdr client talks to the <em>host</em> herdr server over a single bind-mounted socket (<code>herdrSocketPath</code> → <code>HERDR_SOCKET_PATH</code>); <code>herdr_wait_output</code>/<code>herdr_get_agent_result</code> harvest, <code>herdr_message_agent</code> steers, <code>herdr_interrupt_agent</code> stops. Panes are <strong>host-owned</strong>: they survive the disposable <code>docker --rm</code> brain runs, and a human watches or types in them from the herdr TUI. <code>herdrSpawnPane</code> pins a dedicated home pane (its own workspace) as the spawn target, so bot agents stay out of the operator's live work.</li>
+</ul>
+<p>Host side (required for herdr children to actually start): the <code>herdr.service</code> user unit (template in the repo) keeps the herdr server running (starts <strong>only if none is running</strong>, <code>Restart=on-failure</code>, lingering); and pi-herdr is installed <strong>once on the host</strong>, self-contained:</p>
+<pre>mkdir -p ~/.local/share/wa-orchestrator/pi-herdr &amp;&amp; cd $_
+npm init -y &amp;&amp; npm i @andrewjacop/pi-herdr@0.6.0</pre>
+<p>then set <code>"herdrPkgDir"</code> in <code>config.json</code>: brain.ts bind-mounts the dir onto itself and loads the package in-sandbox from the same absolute path (the child extension <code>&lt;pkg&gt;/src/child.ts</code> is injected into the child pi running in a <em>host</em> pane, so it must resolve there). Without <code>herdrSocketPath</code>/<code>herdrPkgDir</code> the herdr tools simply fail in-sandbox and the brain falls back to in-process subagents.</p>
+
+<h2>Extending</h2>
+<ul>
+<li><strong>Add a group</strong> = one entry <code>{"jid", "name", "brain"}</code>
+in <code>groups[]</code> + a restart. JID: first message from the group, or
+<code>xvfb-run -a node dist/discover.js</code> during a maintenance window.</li>
+<li><strong>Add a brain</strong> = one profile in <code>brains{}</code>
+(beads repo, prompt entries, run modes) pointed at by the registry. Give it its
+own <code>workspaceDir</code> (one work area per group — never a shared project
+repo; the beads DB mounts separately at <code>/beads</code>, resolved from any
+cwd via <code>BEADS_DIR</code>).</li>
+</ul>
+
+<h2>Security</h2>
+<ul>
+<li>Every member of a registered group can command the bot (no per-member auth).</li>
+<li>Write-capable run modes are scoped in the prompt: minimal edits, build
+before push, never force-push, never <code>.github/</code>.</li>
+<li>Credentials are materialized inside the container, never in the repo
+(<code>config.json</code> and <code>brain-prompts.json</code> gitignored; only
+templates are published).</li>
+<li>Everything is traced: <code>activity/activity.jsonl</code> + dashboard
+<code>:8093</code>.</li>
+</ul>
+
+<h2>Dashboard</h2>
+<p>The zero-dependency dashboard (<code>dist/dashboard.js</code>, default
+<code>:8093</code>) shows the scoped beads of every <code>cpo</code> brain
+profile plus the latest bot activity. Screenshot below — synthetic fixture
+data, refreshed against the last good snapshot when a refresh fails:</p>
+<figure style="margin:1.25rem 0">
+<img src="images/dashboard.png" alt="wa-orchestrator dashboard — scoped beads table + bot activity feed (dark theme)" style="width:100%; border:1px solid #21262d; border-radius:6px">
+<figcaption style="color:#57606a; font-size:.8rem; margin-top:.4rem">Dashboard on <code>:8093</code> — synthetic fixture data (not a live deployment).</figcaption>
+</figure>
+
+<h2>Pi package / npm</h2>
+<p>Distributed as a <a href="https://pi.dev/docs/latest/packages"><em>pi
+package</em></a> (keyword <code>pi-package</code>, manifest <code>pi</code>):
+<code>pi install npm:wa-orchestrator</code> installs the daemon and the
+operations skill.</p>
+
+<footer>repo: <a href="https://github.com/alx/wa-orchestrator">github.com/alx/wa-orchestrator</a> —
+docs published from the <code>gh-pages</code> branch</footer>
+</main>
+</body>
+</html>
