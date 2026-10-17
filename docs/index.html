@@ -93,7 +93,7 @@ flowchart LR
   BRAIN -->|"docker run --session-id <slug> --session-dir /sessions"| PI
   SESS -.->|"/sessions volume (one dir per group)"| PI
   PI <--> FS
-  PI <-->|ask_questions → extension_ui_request (RPC)| BRAIN
+  PI <-->|"ask_questions → extension_ui_request (RPC)"| BRAIN
   PI <--> SUB
   HDRT -.->|"bind-mounted socket — HERDR_SOCKET_PATH"| HSRV
   HSRV -->|"host-owned panes survive docker --rm"| HSRV
